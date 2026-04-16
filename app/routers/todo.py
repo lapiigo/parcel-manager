@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.auth import require_super_admin
+from app.auth import require_super_admin, require_admin_up
 from app.models.todo import TodoProject, TodoTask, TaskAttachment, TodoMeeting
 from app.permissions import can
 
@@ -52,8 +52,9 @@ PROJECT_COLORS = [
 @router.get("", response_class=HTMLResponse)
 def todo_index(
     request: Request,
+    tg: str = Query(""),
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     projects = (
         db.query(TodoProject)
@@ -96,6 +97,9 @@ def todo_index(
         TodoTask.is_idea == False,
         TodoTask.status.in_(["todo", "in_progress", "backlog"]),
     ).count()
+    from app.services.telegram_service import get_bot_username
+    bot_username = get_bot_username()
+
     return templates.TemplateResponse(
         request, "todo/index.html",
         {
@@ -106,6 +110,8 @@ def todo_index(
             "total_tasks": total_tasks,
             "active_tasks": active_tasks,
             "project_colors": PROJECT_COLORS,
+            "bot_username": bot_username,
+            "tg_flash": tg,
             "can": can,
         },
     )
@@ -120,7 +126,7 @@ def create_project(
     description: str = Form(""),
     color: str = Form("#6366f1"),
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     project = TodoProject(
         name=name.strip(),
@@ -140,7 +146,7 @@ def edit_project(
     description: str = Form(""),
     color: str = Form("#6366f1"),
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     project = db.query(TodoProject).filter(
         TodoProject.id == project_id, TodoProject.user_id == current_user.id
@@ -157,7 +163,7 @@ def edit_project(
 def delete_project(
     project_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     project = db.query(TodoProject).filter(
         TodoProject.id == project_id, TodoProject.user_id == current_user.id
@@ -177,7 +183,7 @@ def project_detail(
     tab: str = Query("tasks"),
     status_filter: str = Query(""),
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     project = db.query(TodoProject).filter(
         TodoProject.id == project_id, TodoProject.user_id == current_user.id
@@ -241,7 +247,7 @@ def create_task(
     deadline: str = Form(""),
     redirect_tab: str = Form("tasks"),
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     deadline_dt = None
     if deadline:
@@ -270,7 +276,7 @@ def update_task_status(
     task_id: int,
     new_status: str = Form(...),
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     task = db.query(TodoTask).filter(
         TodoTask.id == task_id, TodoTask.user_id == current_user.id
@@ -292,7 +298,7 @@ def edit_task(
     status: str = Form("todo"),
     deadline: str = Form(""),
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     task = db.query(TodoTask).filter(
         TodoTask.id == task_id, TodoTask.user_id == current_user.id
@@ -319,7 +325,7 @@ def edit_task(
 def delete_task(
     task_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     task = db.query(TodoTask).filter(
         TodoTask.id == task_id, TodoTask.user_id == current_user.id
@@ -339,7 +345,7 @@ async def upload_attachment(
     task_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     task = db.query(TodoTask).filter(
         TodoTask.id == task_id, TodoTask.user_id == current_user.id
@@ -370,7 +376,7 @@ async def upload_attachment(
 def delete_attachment(
     att_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     att = db.query(TaskAttachment).filter(TaskAttachment.id == att_id).first()
     if att:
@@ -400,7 +406,7 @@ def create_meeting(
     project_id: str = Form(""),
     redirect_to: str = Form(""),
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     try:
         scheduled_dt = datetime.fromisoformat(scheduled_at)
@@ -428,7 +434,7 @@ def delete_meeting(
     meeting_id: int,
     redirect_to: str = Form(""),
     db: Session = Depends(get_db),
-    current_user=Depends(require_super_admin),
+    current_user=Depends(require_admin_up),
 ):
     meeting = db.query(TodoMeeting).filter(
         TodoMeeting.id == meeting_id, TodoMeeting.user_id == current_user.id
@@ -439,3 +445,39 @@ def delete_meeting(
     if redirect_to:
         return RedirectResponse(redirect_to, status_code=302)
     return RedirectResponse("/todo", status_code=302)
+
+
+# ── Telegram connect / disconnect ─────────────────────────────────────────────
+
+@router.post("/telegram/connect")
+def telegram_connect(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin_up),
+):
+    import secrets
+    from datetime import timedelta
+    from app.services.telegram_service import get_bot_username
+
+    bot_username = get_bot_username()
+    if not bot_username:
+        return RedirectResponse("/todo?tg=no_bot", status_code=302)
+
+    token = secrets.token_hex(16)
+    current_user.telegram_token = token
+    current_user.telegram_token_expires = datetime.utcnow() + timedelta(minutes=10)
+    db.commit()
+
+    tg_url = f"https://t.me/{bot_username}?start={token}"
+    return RedirectResponse(tg_url, status_code=302)
+
+
+@router.post("/telegram/disconnect")
+def telegram_disconnect(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin_up),
+):
+    current_user.telegram_chat_id = None
+    current_user.telegram_token = None
+    current_user.telegram_token_expires = None
+    db.commit()
+    return RedirectResponse("/todo?tg=disconnected", status_code=302)

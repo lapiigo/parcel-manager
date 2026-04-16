@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.database import Base
@@ -18,6 +18,11 @@ class User(Base):
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     last_login = Column(DateTime, nullable=True)
+
+    # Telegram integration (per-user)
+    telegram_chat_id = Column(String(50), nullable=True)
+    telegram_token = Column(String(64), nullable=True)       # temporary connect token
+    telegram_token_expires = Column(DateTime, nullable=True) # token expiry
 
     client = relationship("Client", back_populates="user", foreign_keys=[client_id])
     sessions = relationship("Session", back_populates="user", cascade="all, delete-orphan")
