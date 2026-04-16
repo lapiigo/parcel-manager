@@ -26,12 +26,28 @@
   </style>
 </head>
 <body class="bg-gray-50 text-gray-900 antialiased">
-<div class="flex h-screen overflow-hidden">
+<div class="flex h-screen overflow-hidden" x-data="{ sidebarOpen: false }">
+
+  <!-- Mobile backdrop -->
+  <div x-show="sidebarOpen"
+       x-transition:enter="transition-opacity ease-linear duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition-opacity ease-linear duration-200"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       @click="sidebarOpen = false"
+       class="fixed inset-0 z-40 bg-black bg-opacity-50 md:hidden"
+       x-cloak></div>
 
   <!-- Sidebar -->
-  <aside class="w-60 bg-slate-900 flex flex-col shrink-0">
+  <aside class="fixed inset-y-0 left-0 z-50 w-60 bg-slate-900 flex flex-col shrink-0
+                transform transition-transform duration-200 ease-in-out
+                md:relative md:translate-x-0"
+         :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'">
+
     <!-- Logo -->
-    <div class="px-4 py-5 border-b border-slate-700">
+    <div class="px-4 py-5 border-b border-slate-700 flex items-center justify-between">
       <a href="/dashboard" class="flex items-center gap-2">
         <span class="text-2xl">📦</span>
         <div>
@@ -39,6 +55,11 @@
           <p class="text-indigo-400 font-bold text-sm leading-tight">Manager</p>
         </div>
       </a>
+      <button @click="sidebarOpen = false" class="md:hidden text-slate-400 hover:text-white p-1 rounded">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
     </div>
 
     <!-- Nav -->
@@ -126,17 +147,24 @@
   </aside>
 
   <!-- Main -->
-  <div class="flex-1 flex flex-col overflow-hidden">
+  <div class="flex-1 flex flex-col overflow-hidden min-w-0">
     <!-- Top bar -->
-    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between shrink-0">
-      <h1 class="text-lg font-semibold text-gray-800">{% block heading %}{% endblock %}</h1>
-      <div class="flex items-center gap-3">
+    <header class="bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3 shrink-0">
+      <!-- Hamburger (mobile only) -->
+      <button @click="sidebarOpen = true"
+              class="md:hidden text-gray-500 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-100 transition-colors">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+      <h1 class="text-base md:text-lg font-semibold text-gray-800 flex-1 truncate">{% block heading %}{% endblock %}</h1>
+      <div class="flex items-center gap-2 flex-wrap justify-end">
         {% block header_actions %}{% endblock %}
       </div>
     </header>
 
     <!-- Content -->
-    <main class="flex-1 overflow-y-auto p-6">
+    <main class="flex-1 overflow-y-auto p-4 md:p-6">
       {% block content %}{% endblock %}
     </main>
   </div>
