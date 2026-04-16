@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Users — Parcel Manager{% endblock %}
+{% block heading %}User Management{% endblock %}
+{% block header_actions %}
+  {% if can(current_user, 'create_user') %}
+  <a href="/admin/users/new" class="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    New User
+  </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-xs uppercase text-gray-500 font-semibold tracking-wide">
+      <tr>
+        <th class="px-4 py-3 text-left">Username</th>
+        <th class="px-4 py-3 text-left">Full Name</th>
+        <th class="px-4 py-3 text-left">Email</th>
+        <th class="px-4 py-3 text-left">Role</th>
+        <th class="px-4 py-3 text-left">Client</th>
+        <th class="px-4 py-3 text-left">Status</th>
+        <th class="px-4 py-3 text-left">Last Login</th>
+        <th class="px-4 py-3"></th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-50">
+      {% for u in users %}
+      <tr class="hover:bg-gray-50 transition-colors {% if not u.is_active %}opacity-50{% endif %}">
+        <td class="px-4 py-3 font-mono font-medium text-gray-800">{{ u.username }}</td>
+        <td class="px-4 py-3 text-gray-700">{{ u.full_name or "—" }}</td>
+        <td class="px-4 py-3 text-gray-500">{{ u.email or "—" }}</td>
+        <td class="px-4 py-3">
+          <span class="text-xs px-2 py-1 rounded-full font-medium {{ ROLE_BADGE_COLORS.get(u.role, 'bg-gray-100 text-gray-600') }}">
+            {{ ROLE_LABELS.get(u.role, u.role) }}
+          </span>
+        </td>
+        <td class="px-4 py-3 text-gray-500">{{ u.client.name if u.client else "—" }}</td>
+        <td class="px-4 py-3">
+          <span class="text-xs px-2 py-1 rounded-full font-medium {% if u.is_active %}bg-green-100 text-green-700{% else %}bg-gray-100 text-gray-500{% endif %}">
+            {{ "Active" if u.is_active else "Inactive" }}
+          </span>
+        </td>
+        <td class="px-4 py-3 text-gray-400 text-xs">{{ u.last_login.strftime('%d.%m.%Y %H:%M') if u.last_login else "Never" }}</td>
+        <td class="px-4 py-3 flex items-center gap-2">
+          {% if can(current_user, 'edit_user') and u.id != current_user.id %}
+            {% if not (u.role == 'super_admin' and current_user.role != 'super_admin') %}
+            <a href="/admin/users/{{ u.id }}/edit" class="text-indigo-600 hover:underline text-xs font-medium">Edit</a>
+            {% endif %}
+          {% endif %}
+          {% if can(current_user, 'delete_user') and u.id != current_user.id %}
+            {% if not (u.role == 'super_admin' and current_user.role != 'super_admin') %}
+            <form method="post" action="/admin/users/{{ u.id }}/delete" onsubmit="return confirm('Delete this user?')">
+              <button type="submit" class="text-red-500 hover:underline text-xs font-medium">Delete</button>
+            </form>
+            {% endif %}
+          {% endif %}
+          {% if u.id == current_user.id %}<span class="text-xs text-gray-300">you</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="px-4 py-12 text-center text-gray-400">No users found</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Reports — Parcel Manager{% endblock %}
+{% block heading %}Reports{% endblock %}
+{% block header_actions %}
+  {% if can(current_user, 'create_report') %}
+  <a href="/reports/new" class="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    New Report
+  </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-xs uppercase text-gray-500 font-semibold tracking-wide">
+      <tr>
+        <th class="px-4 py-3 text-left">Title</th>
+        <th class="px-4 py-3 text-left">Client</th>
+        <th class="px-4 py-3 text-left">Period</th>
+        <th class="px-4 py-3 text-right">Orders</th>
+        <th class="px-4 py-3 text-right">Sales</th>
+        <th class="px-4 py-3 text-right">Profit</th>
+        <th class="px-4 py-3 text-left">Created</th>
+        <th class="px-4 py-3"></th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-50">
+      {% for r in reports %}
+      <tr class="hover:bg-gray-50 transition-colors">
+        <td class="px-4 py-3 font-medium text-gray-800">{{ r.title }}</td>
+        <td class="px-4 py-3 text-gray-500">{{ r.client.name if r.client else "General" }}</td>
+        <td class="px-4 py-3 text-gray-500 text-xs">
+          {% if r.period_start %}{{ r.period_start.strftime('%d.%m.%Y') }}{% endif %}
+          {% if r.period_end %} — {{ r.period_end.strftime('%d.%m.%Y') }}{% endif %}
+          {% if not r.period_start and not r.period_end %}—{% endif %}
+        </td>
+        <td class="px-4 py-3 text-right text-gray-600">{{ r.total_parcels }}</td>
+        <td class="px-4 py-3 text-right font-medium text-gray-700">${{ "%.2f"|format(r.total_sales) }}</td>
+        <td class="px-4 py-3 text-right font-semibold {% if r.total_profit >= 0 %}text-green-600{% else %}text-red-600{% endif %}">${{ "%.2f"|format(r.total_profit) }}</td>
+        <td class="px-4 py-3 text-gray-400 text-xs">{{ r.created_at.strftime('%d.%m.%Y') if r.created_at else "—" }}</td>
+        <td class="px-4 py-3 flex items-center gap-2">
+          <a href="/reports/{{ r.id }}" class="text-indigo-600 hover:underline text-xs font-medium">Open →</a>
+          {% if can(current_user, 'delete_report') %}
+          <form method="post" action="/reports/{{ r.id }}/delete" onsubmit="return confirm('Delete this report?')">
+            <button type="submit" class="text-red-500 hover:underline text-xs font-medium">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" class="px-4 py-12 text-center text-gray-400"><p class="text-2xl mb-2">📊</p><p>No reports yet</p></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

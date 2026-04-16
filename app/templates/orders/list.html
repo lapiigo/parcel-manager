@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Orders — Parcel Manager{% endblock %}
+{% block heading %}Orders{% endblock %}
+{% block header_actions %}
+  {% if can(current_user, 'create_order') %}
+  <a href="/orders/new" class="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    New Order
+  </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<!-- Filters -->
+<div class="bg-white rounded-xl border border-gray-100 shadow-sm mb-4">
+  <div class="px-4 py-3 border-b border-gray-100 flex flex-wrap gap-3 items-center">
+    <!-- Platform tabs -->
+    <div class="flex gap-1 flex-wrap">
+      <a href="/orders" class="px-3 py-1.5 text-xs font-medium rounded-lg {% if not active_platform %}bg-indigo-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %} transition-colors">All</a>
+      {% for key, label in PLATFORM_LABELS.items() %}
+      <a href="/orders?platform={{ key }}{% if active_status %}&status={{ active_status }}{% endif %}" class="px-3 py-1.5 text-xs font-medium rounded-lg {% if active_platform == key %}bg-indigo-600 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %} transition-colors">{{ label }}</a>
+      {% endfor %}
+    </div>
+    <div class="ml-auto flex gap-1">
+      <a href="/orders{% if active_platform %}?platform={{ active_platform }}{% endif %}" class="px-3 py-1.5 text-xs font-medium rounded-lg {% if not active_status %}bg-slate-700 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %} transition-colors">All Statuses</a>
+      {% for key, label in ORDER_STATUS_LABELS.items() %}
+      <a href="/orders?{% if active_platform %}platform={{ active_platform }}&{% endif %}status={{ key }}" class="px-3 py-1.5 text-xs font-medium rounded-lg {% if active_status == key %}bg-slate-700 text-white{% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %} transition-colors">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Totals (admin only) -->
+  {% if totals %}
+  <div class="px-4 py-3 bg-slate-50 border-b border-gray-100 flex flex-wrap gap-6 text-sm">
+    <span class="text-gray-500">Orders: <strong class="text-gray-800">{{ totals.count }}</strong></span>
+    <span class="text-gray-500">Sales: <strong class="text-gray-800">${{ "%.2f"|format(totals.total_sales) }}</strong></span>
+    <span class="text-gray-500">Commission: <strong class="text-red-600">-${{ "%.2f"|format(totals.total_commission) }}</strong></span>
+    <span class="text-gray-500">Shipping: <strong class="text-red-600">-${{ "%.2f"|format(totals.total_shipping) }}</strong></span>
+    <span class="text-gray-500">Profit: <strong class="{% if totals.total_profit >= 0 %}text-green-600{% else %}text-red-600{% endif %}">${{ "%.2f"|format(totals.total_profit) }}</strong></span>
+  </div>
+  {% endif %}
+
+  <!-- Table -->
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-xs uppercase text-gray-500 font-semibold tracking-wide">
+        <tr>
+          <th class="px-4 py-3 text-left">Order #</th>
+          <th class="px-4 py-3 text-left">Platform</th>
+          <th class="px-4 py-3 text-left">Client</th>
+          <th class="px-4 py-3 text-left">Parcel</th>
+          <th class="px-4 py-3 text-right">Sale</th>
+          {% if can(current_user, 'view_financials') %}
+          <th class="px-4 py-3 text-right">Profit</th>
+          {% endif %}
+          <th class="px-4 py-3 text-left">Status</th>
+          <th class="px-4 py-3 text-left">Date</th>
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-50">
+        {% for o in orders %}
+        <tr class="hover:bg-gray-50 transition-colors">
+          <td class="px-4 py-3 font-mono font-medium text-gray-800">{{ o.order_number }}</td>
+          <td class="px-4 py-3">
+            <span class="text-xs px-2 py-1 rounded-full font-medium bg-slate-100 text-slate-700">
+              {{ PLATFORM_LABELS.get(o.platform, o.platform) }}
+            </span>
+          </td>
+          <td class="px-4 py-3 text-gray-500">{{ o.client.name if o.client else "—" }}</td>
+          <td class="px-4 py-3 font-mono text-xs text-gray-500">{{ o.parcel.tracking_number if o.parcel else "—" }}</td>
+          <td class="px-4 py-3 text-right font-medium text-gray-800">${{ "%.2f"|format(o.sale_price) }}</td>
+          {% if can(current_user, 'view_financials') %}
+          <td class="px-4 py-3 text-right font-semibold {% if o.profit >= 0 %}text-green-600{% else %}text-red-600{% endif %}">${{ "%.2f"|format(o.profit) }}</td>
+          {% endif %}
+          <td class="px-4 py-3">
+            <span class="text-xs px-2 py-1 rounded-full font-medium {{ ORDER_STATUS_COLORS.get(o.status, '') }}">
+              {{ ORDER_STATUS_LABELS.get(o.status, o.status) }}
+            </span>
+          </td>
+          <td class="px-4 py-3 text-gray-400 text-xs">{{ o.order_date.strftime('%d.%m.%Y') if o.order_date else "—" }}</td>
+          <td class="px-4 py-3">
+            <a href="/orders/{{ o.id }}" class="text-indigo-600 hover:underline text-xs font-medium">Details →</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="px-4 py-12 text-center text-gray-400"><p class="text-2xl mb-2">📋</p><p>No orders yet</p></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

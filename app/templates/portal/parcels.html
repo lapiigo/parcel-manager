@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}My Parcels — Parcel Manager{% endblock %}
+{% block heading %}My Parcels{% endblock %}
+
+{% block content %}
+<!-- Tabs -->
+<div class="bg-white rounded-xl border border-gray-100 shadow-sm mb-4">
+  <div class="flex border-b border-gray-100 overflow-x-auto">
+    <a href="/portal/parcels" class="flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 {% if not active_status %}border-indigo-600 text-indigo-600{% else %}border-transparent text-gray-500 hover:text-gray-700{% endif %}">
+      All <span class="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">{{ (counts.values() | sum) }}</span>
+    </a>
+    {% for s, label, color in [('in_transit','In Transit','yellow'),('in_warehouse','In Warehouse','green'),('sold','Sold','purple'),('disposed','Disposed','red')] %}
+    <a href="/portal/parcels?status={{ s }}" class="flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 {% if active_status == s %}border-indigo-600 text-indigo-600{% else %}border-transparent text-gray-500 hover:text-gray-700{% endif %}">
+      {{ label }}
+      <span class="text-xs rounded-full px-2 py-0.5 font-semibold
+        {% if color == 'yellow' %}bg-yellow-100 text-yellow-700
+        {% elif color == 'green' %}bg-green-100 text-green-700
+        {% elif color == 'purple' %}bg-purple-100 text-purple-700
+        {% else %}bg-red-100 text-red-700{% endif %}">{{ counts.get(s, 0) }}</span>
+    </a>
+    {% endfor %}
+  </div>
+
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-xs uppercase text-gray-500 font-semibold tracking-wide">
+        <tr>
+          <th class="px-4 py-3 text-left">Tracking Number</th>
+          <th class="px-4 py-3 text-left">Description</th>
+          <th class="px-4 py-3 text-left">Status</th>
+          <th class="px-4 py-3 text-left">Added</th>
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-50">
+        {% for p in parcels %}
+        <tr class="hover:bg-gray-50 transition-colors">
+          <td class="px-4 py-3 font-mono font-medium text-gray-800">{{ p.tracking_number }}</td>
+          <td class="px-4 py-3 text-gray-600">{{ p.description or "—" }}</td>
+          <td class="px-4 py-3">
+            <span class="text-xs px-2 py-1 rounded-full font-medium {{ STATUS_COLORS.get(p.status, '') }}">
+              {{ STATUS_LABELS.get(p.status, p.status) }}
+            </span>
+          </td>
+          <td class="px-4 py-3 text-gray-400 text-xs">{{ p.created_at.strftime('%d.%m.%Y') if p.created_at else "—" }}</td>
+          <td class="px-4 py-3">
+            <a href="/portal/parcels/{{ p.id }}" class="text-indigo-600 hover:underline text-xs font-medium">Details →</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="px-4 py-12 text-center text-gray-400"><p class="text-2xl mb-2">📭</p><p>No parcels yet</p></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}{{ report.title if report else "New Report" }} — Parcel Manager{% endblock %}
+{% block heading %}{{ report.title if report else "New Report" }}{% endblock %}
+{% block header_actions %}
+  <a href="/reports" class="text-sm text-gray-500 hover:text-gray-700">← Back</a>
+  {% if report and can(current_user, 'delete_report') %}
+  <form method="post" action="/reports/{{ report.id }}/delete" onsubmit="return confirm('Delete this report?')">
+    <button type="submit" class="bg-red-50 hover:bg-red-100 text-red-600 text-sm font-medium px-4 py-2 rounded-lg transition-colors">Delete</button>
+  </form>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl space-y-5">
+  {% if report %}
+  <!-- Summary -->
+  <div class="grid grid-cols-3 gap-4">
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
+      <p class="text-xs text-gray-400 mb-1">Orders</p>
+      <p class="text-2xl font-bold text-gray-800">{{ report.total_parcels }}</p>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
+      <p class="text-xs text-gray-400 mb-1">Sales</p>
+      <p class="text-2xl font-bold text-gray-800">${{ "%.2f"|format(report.total_sales) }}</p>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
+      <p class="text-xs text-gray-400 mb-1">Profit</p>
+      <p class="text-2xl font-bold {% if report.total_profit >= 0 %}text-green-600{% else %}text-red-600{% endif %}">${{ "%.2f"|format(report.total_profit) }}</p>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+    {% if error %}<div class="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{{ error }}</div>{% endif %}
+    <form method="post" action="{{ '/reports/' + report.id|string + '/edit' if report else '/reports/new' }}">
+      <div class="grid grid-cols-1 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Report Title *</label>
+          <input type="text" name="title" required value="{{ report.title if report else '' }}"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                 placeholder="e.g. Weekly Report #12" />
+        </div>
+
+        {% if not report %}
+        <div class="grid grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Client</label>
+            <select name="client_id" class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+              <option value="">— all —</option>
+              {% for c in clients %}
+              <option value="{{ c.id }}">{{ c.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Start</label>
+            <input type="date" name="period_start"
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">End</label>
+            <input type="date" name="period_end"
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+        </div>
+        <p class="text-xs text-gray-400">Data (sales, profit) will be automatically calculated for the selected period.</p>
+        {% else %}
+        <div class="text-sm text-gray-500">
+          Client: <strong>{{ report.client.name if report.client else "General" }}</strong> ·
+          Period: <strong>{{ report.period_start.strftime('%d.%m.%Y') if report.period_start else "—" }} – {{ report.period_end.strftime('%d.%m.%Y') if report.period_end else "—" }}</strong>
+        </div>
+        {% endif %}
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Report Content</label>
+          <textarea name="content" rows="8"
+                    class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 font-mono"
+                    placeholder="Enter detailed description, notes, any text here...">{{ report.content if report else '' }}</textarea>
+        </div>
+
+        <div class="flex gap-3 pt-2">
+          <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-6 py-2.5 rounded-lg text-sm transition-colors">Save</button>
+          <a href="/reports" class="border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium px-6 py-2.5 rounded-lg text-sm transition-colors">Cancel</a>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

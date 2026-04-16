@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Accept Parcel — {{ parcel.tracking_number }}{% endblock %}
+{% block heading %}Accept Parcel{% endblock %}
+{% block header_actions %}<a href="/parcels/{{ parcel.id }}" class="text-sm text-gray-500 hover:text-gray-700">← Back</a>{% endblock %}
+
+{% block content %}
+<div class="max-w-lg">
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+
+    <!-- Parcel summary -->
+    <div class="mb-5 p-4 bg-gray-50 rounded-lg text-sm space-y-1">
+      {% if parcel.external_order_id %}
+      <p><span class="text-gray-400">Order ID:</span> <strong class="font-mono">{{ parcel.external_order_id }}</strong></p>
+      {% endif %}
+      <p><span class="text-gray-400">Tracking:</span> <span class="font-mono">{{ parcel.tracking_number }}</span></p>
+      {% if parcel.asin %}
+      <p><span class="text-gray-400">ASIN:</span> <span class="font-mono">{{ parcel.asin }}</span></p>
+      {% endif %}
+      {% if parcel.title %}
+      <p><span class="text-gray-400">Title:</span> {{ parcel.title }}</p>
+      {% endif %}
+      <p><span class="text-gray-400">Qty:</span> {{ parcel.qty or '—' }}</p>
+      {% if parcel.arrived_at %}
+      <p><span class="text-gray-400">Delivered:</span> {{ parcel.arrived_at.strftime('%d.%m.%Y') }}</p>
+      {% endif %}
+    </div>
+
+    <form method="post" action="/parcels/{{ parcel.id }}/accept" x-data="{ cond: 'ok' }">
+
+      <p class="text-sm font-semibold text-gray-700 mb-3">Parcel condition</p>
+
+      <div class="flex gap-3 mb-5">
+        <label class="flex-1 cursor-pointer">
+          <input type="radio" name="condition" value="ok" x-model="cond" class="sr-only" />
+          <div :class="cond === 'ok' ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'"
+               class="border-2 rounded-xl p-4 text-center transition-colors">
+            <p class="text-2xl mb-1">✅</p>
+            <p class="text-sm font-semibold">All OK</p>
+            <p class="text-xs mt-0.5">Cost calculated automatically</p>
+          </div>
+        </label>
+        <label class="flex-1 cursor-pointer">
+          <input type="radio" name="condition" value="problem" x-model="cond" class="sr-only" />
+          <div :class="cond === 'problem' ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'"
+               class="border-2 rounded-xl p-4 text-center transition-colors">
+            <p class="text-2xl mb-1">⚠️</p>
+            <p class="text-sm font-semibold">Has Problems</p>
+            <p class="text-xs mt-0.5">Cost set to $0</p>
+          </div>
+        </label>
+      </div>
+
+      <!-- Problem fields -->
+      <div x-show="cond === 'problem'" x-cloak class="border border-red-100 bg-red-50 rounded-lg p-4 mb-5 space-y-3">
+        <p class="text-xs font-semibold text-red-700 uppercase tracking-wider">Override (optional)</p>
+        <p class="text-xs text-red-600">If a different item arrived that you want to sell, enter the correct ASIN and quantity.</p>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-gray-600 mb-1">Correct ASIN</label>
+            <input type="text" name="asin_override" maxlength="20"
+                   placeholder="{{ parcel.asin or 'e.g. B08N5WRWNW' }}"
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300" />
+          </div>
+          <div>
+            <label class="block text-xs text-gray-600 mb-1">Correct Qty</label>
+            <input type="number" name="qty_override" min="1"
+                   placeholder="{{ parcel.qty or 1 }}"
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300" />
+          </div>
+        </div>
+        <p class="text-xs text-red-500">Cost will be set to $0. You can recalculate after updating the correct ASIN.</p>
+      </div>
+
+      <div class="flex gap-3">
+        <button type="submit"
+                :class="cond === 'ok' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'"
+                class="text-white font-medium px-6 py-2.5 rounded-lg text-sm transition-colors">
+          <span x-text="cond === 'ok' ? 'Accept & Calculate Cost' : 'Accept with Problems'">Accept</span>
+        </button>
+        <a href="/parcels/{{ parcel.id }}" class="border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium px-6 py-2.5 rounded-lg text-sm transition-colors">Cancel</a>
+      </div>
+
+    </form>
+  </div>
+</div>
+{% endblock %}

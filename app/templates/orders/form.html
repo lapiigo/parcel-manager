@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}{{ "Order " + order.order_number if order else "New Order" }} — Parcel Manager{% endblock %}
+{% block heading %}{{ "Order " + order.order_number if order else "New Order" }}{% endblock %}
+{% block header_actions %}
+  <a href="/orders" class="text-sm text-gray-500 hover:text-gray-700">← Back</a>
+  {% if order and can(current_user, 'delete_order') %}
+  <form method="post" action="/orders/{{ order.id }}/delete" onsubmit="return confirm('Delete this order?')">
+    <button type="submit" class="bg-red-50 hover:bg-red-100 text-red-600 text-sm font-medium px-4 py-2 rounded-lg transition-colors">Delete</button>
+  </form>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl">
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+    {% if error %}
+    <div class="mb-4 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">{{ error }}</div>
+    {% endif %}
+
+    <!-- Profit summary (view mode) -->
+    {% if order and can(current_user, 'view_financials') %}
+    <div class="mb-5 p-4 bg-slate-50 rounded-xl flex flex-wrap gap-4 text-sm">
+      <div><span class="text-gray-400">Sale:</span> <strong>${{ "%.2f"|format(order.sale_price) }}</strong></div>
+      <div><span class="text-gray-400">Commission:</span> <strong class="text-red-600">-${{ "%.2f"|format(order.platform_commission) }}</strong></div>
+      <div><span class="text-gray-400">Shipping:</span> <strong class="text-red-600">-${{ "%.2f"|format(order.shipping_cost) }}</strong></div>
+      <div><span class="text-gray-400">Other Costs:</span> <strong class="text-red-600">-${{ "%.2f"|format(order.other_costs) }}</strong></div>
+      <div class="ml-auto border-l pl-4"><span class="text-gray-400">Profit:</span>
+        <strong class="text-lg {% if order.profit >= 0 %}text-green-600{% else %}text-red-600{% endif %}">${{ "%.2f"|format(order.profit) }}</strong>
+      </div>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{{ '/orders/' + order.id|string + '/edit' if order else '/orders/new' }}">
+      <div class="grid grid-cols-1 gap-5">
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Order # *</label>
+            <input type="text" name="order_number" required value="{{ order.order_number if order else '' }}"
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                   placeholder="e.g. 114-1234567-1234567" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Platform *</label>
+            <select name="platform" required class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+              {% for key, label in PLATFORM_LABELS.items() %}
+              <option value="{{ key }}" {% if order and order.platform == key %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Parcel (in warehouse)</label>
+            <select name="parcel_id" class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" {% if order %}disabled{% endif %}>
+              <option value="">— not selected —</option>
+              {% for p in warehouse_parcels %}
+              <option value="{{ p.id }}" {% if order and order.parcel_id == p.id %}selected{% endif %}>{{ p.tracking_number }}{% if p.asin %} — {{ p.asin }}{% endif %}</option>
+              {% endfor %}
+              {% if order and order.parcel and order.parcel.status == 'sold' %}
+              <option value="{{ order.parcel.id }}" selected>{{ order.parcel.tracking_number }}{% if order.parcel.asin %} — {{ order.parcel.asin }}{% endif %} (sold)</option>
+              {% endif %}
+            </select>
+            {% if order %}<p class="text-xs text-gray-400 mt-1">Parcel cannot be changed after order is created</p>{% endif %}
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Client</label>
+            <select name="client_id" class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+              <option value="">— marketplace —</option>
+              {% for c in clients %}
+              <option value="{{ c.id }}" {% if order and order.client_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <!-- Financials -->
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Sale Amount ($) *</label>
+            <input type="number" step="0.01" name="sale_price" required value="{{ order.sale_price if order else '0' }}"
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Platform Commission ($)</label>
+            <input type="number" step="0.01" name="platform_commission" value="{{ order.platform_commission if order else '0' }}"
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Shipping Cost ($)</label>
+            <input type="number" step="0.01" name="shipping_cost" value="{{ order.shipping_cost if order else '0' }}"
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Other Costs ($)</label>
+            <input type="number" step="0.01" name="other_costs" value="{{ order.other_costs if order else '0' }}"
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+            <select name="status" class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+              {% for key, label in ORDER_STATUS_LABELS.items() %}
+              <option value="{{ key }}" {% if order and order.status == key %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Order Date</label>
+            <input type="date" name="order_date" value="{{ order.order_date.strftime('%Y-%m-%d') if order and order.order_date else '' }}"
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+          <textarea name="notes" rows="3"
+                    class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    placeholder="Additional information...">{{ order.notes if order else '' }}</textarea>
+        </div>
+
+        <div class="flex gap-3 pt-2">
+          <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-6 py-2.5 rounded-lg text-sm transition-colors">
+            {{ "Save" if order else "Create Order" }}
+          </button>
+          <a href="/orders" class="border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium px-6 py-2.5 rounded-lg text-sm transition-colors">Cancel</a>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

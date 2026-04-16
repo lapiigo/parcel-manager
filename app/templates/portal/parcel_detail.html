@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}{{ parcel.tracking_number }} — My Account{% endblock %}
+{% block heading %}{{ parcel.tracking_number }}{% endblock %}
+{% block header_actions %}<a href="/portal/parcels" class="text-sm text-gray-500 hover:text-gray-700">← Back</a>{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <div class="lg:col-span-2 space-y-5">
+
+    <!-- Info -->
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+      <h3 class="text-sm font-semibold text-gray-700 mb-4">Parcel Information</h3>
+      <dl class="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+        <div>
+          <dt class="text-gray-400">Status</dt>
+          <dd><span class="px-2 py-1 rounded-full text-xs font-medium {{ STATUS_COLORS.get(parcel.status, '') }}">{{ STATUS_LABELS.get(parcel.status, parcel.status) }}</span></dd>
+        </div>
+        <div>
+          <dt class="text-gray-400">Weight</dt>
+          <dd class="font-medium text-gray-700">{{ parcel.weight_kg|string + " kg" if parcel.weight_kg else "—" }}</dd>
+        </div>
+        <div class="col-span-2">
+          <dt class="text-gray-400">Description</dt>
+          <dd class="font-medium text-gray-700">{{ parcel.description or "—" }}</dd>
+        </div>
+        <div>
+          <dt class="text-gray-400">Arrived at Warehouse</dt>
+          <dd class="font-medium text-gray-700">{{ parcel.arrived_at.strftime('%d.%m.%Y') if parcel.arrived_at else "Not arrived yet" }}</dd>
+        </div>
+      </dl>
+    </div>
+
+    <!-- Photos -->
+    {% if parcel.photos %}
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+      <h3 class="text-sm font-semibold text-gray-700 mb-4">Photos</h3>
+      <div class="grid grid-cols-3 gap-3">
+        {% for photo in parcel.photos %}
+        <div>
+          <img src="{{ photo.file_path }}" alt="{{ photo.caption or '' }}" class="w-full h-28 object-cover rounded-lg border border-gray-100" />
+          {% if photo.caption %}<p class="text-xs text-gray-500 mt-1 truncate">{{ photo.caption }}</p>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Report a problem / comment -->
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+      <h3 class="text-sm font-semibold text-gray-700 mb-1">Report an issue or leave a comment</h3>
+      <p class="text-xs text-gray-400 mb-4">Let us know if everything is OK or if there is a problem with the parcel</p>
+      <form method="post" action="/portal/parcels/{{ parcel.id }}/comment" class="space-y-3">
+        <div class="flex gap-3">
+          <button type="submit" name="body" value="✅ Everything is OK" class="px-4 py-2 bg-green-50 border border-green-200 text-green-700 rounded-lg text-sm font-medium hover:bg-green-100 transition-colors">✅ Everything is OK</button>
+          <button type="submit" name="body" value="⚠️ There is a problem with the parcel" class="px-4 py-2 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors">⚠️ There is a problem</button>
+        </div>
+        <textarea name="body" rows="3" placeholder="Or write your own comment..."
+                  class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Send</button>
+      </form>
+    </div>
+
+    <!-- Comments -->
+    {% if parcel.comments %}
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+      <h3 class="text-sm font-semibold text-gray-700 mb-4">Comments</h3>
+      <div class="space-y-3">
+        {% for c in parcel.comments %}
+        <div class="bg-gray-50 rounded-lg p-3">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-xs font-semibold text-gray-600">{{ c.author or "—" }}</span>
+            <span class="text-xs text-gray-400">{{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else "" }}</span>
+          </div>
+          <p class="text-sm text-gray-700">{{ c.body }}</p>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Status history -->
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5 h-fit">
+    <h3 class="text-sm font-semibold text-gray-700 mb-4">History</h3>
+    <div class="space-y-3">
+      {% for log in parcel.status_logs %}
+      <div class="flex gap-3">
+        <div class="w-2 h-2 rounded-full bg-indigo-400 mt-1.5 shrink-0"></div>
+        <div>
+          <p class="text-xs text-gray-600 font-medium">{{ STATUS_LABELS.get(log.new_status, log.new_status) }}</p>
+          {% if log.notes %}<p class="text-xs text-gray-400">{{ log.notes }}</p>{% endif %}
+          <p class="text-xs text-gray-300">{{ log.changed_at.strftime('%d.%m.%Y %H:%M') if log.changed_at else "" }}</p>
+        </div>
+      </div>
+      {% else %}
+      <p class="text-xs text-gray-400">No changes yet</p>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

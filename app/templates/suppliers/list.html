@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Suppliers — Parcel Manager{% endblock %}
+{% block heading %}Suppliers{% endblock %}
+{% block header_actions %}
+  {% if can(current_user, 'create_supplier') %}
+  <a href="/suppliers/new" class="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+    Add
+  </a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-xs uppercase text-gray-500 font-semibold tracking-wide">
+      <tr>
+        <th class="px-4 py-3 text-left">Name</th>
+        <th class="px-4 py-3 text-left">Contact</th>
+        <th class="px-4 py-3 text-left">Email</th>
+        <th class="px-4 py-3 text-left">Phone</th>
+        <th class="px-4 py-3 text-left">Country</th>
+        <th class="px-4 py-3 text-left">Platform</th>
+        <th class="px-4 py-3"></th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-50">
+      {% for s in suppliers %}
+      <tr class="hover:bg-gray-50 transition-colors">
+        <td class="px-4 py-3 font-medium text-gray-800">{{ s.name }}</td>
+        <td class="px-4 py-3 text-gray-500">{{ s.contact_name or "—" }}</td>
+        <td class="px-4 py-3 text-gray-500">{{ s.email or "—" }}</td>
+        <td class="px-4 py-3 text-gray-500">{{ s.phone or "—" }}</td>
+        <td class="px-4 py-3 text-gray-500">{{ s.country or "—" }}</td>
+        <td class="px-4 py-3 text-gray-500">{{ s.platform or "—" }}</td>
+        <td class="px-4 py-3 flex items-center gap-2">
+          {% if s.platform in ('housecargo', 'shipx') and s.login_username and s.login_password_encrypted %}
+          <form method="post" action="/suppliers/{{ s.id }}/sync">
+            <button type="submit" class="text-emerald-600 hover:underline text-xs font-medium">Sync</button>
+          </form>
+          {% endif %}
+          {% if can(current_user, 'edit_supplier') %}
+          <a href="/suppliers/{{ s.id }}/edit" class="text-indigo-600 hover:underline text-xs font-medium">Edit</a>
+          {% endif %}
+          {% if can(current_user, 'delete_supplier') %}
+          <form method="post" action="/suppliers/{{ s.id }}/delete" onsubmit="return confirm('Delete?')">
+            <button type="submit" class="text-red-500 hover:underline text-xs font-medium">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="px-4 py-12 text-center text-gray-400"><p class="text-2xl mb-2">🏭</p><p>No suppliers yet</p></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

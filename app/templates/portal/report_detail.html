@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ report.title }} — Parcel Manager{% endblock %}
+{% block heading %}{{ report.title }}{% endblock %}
+{% block header_actions %}<a href="/portal/reports" class="text-sm text-gray-500 hover:text-gray-700">← Back</a>{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl space-y-5">
+  <!-- Summary -->
+  <div class="grid grid-cols-3 gap-4">
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
+      <p class="text-xs text-gray-400 mb-1">Orders</p>
+      <p class="text-2xl font-bold text-gray-800">{{ report.total_parcels }}</p>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
+      <p class="text-xs text-gray-400 mb-1">Total Sales</p>
+      <p class="text-2xl font-bold text-gray-800">${{ "%.2f"|format(report.total_sales) }}</p>
+    </div>
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
+      <p class="text-xs text-gray-400 mb-1">Profit</p>
+      <p class="text-2xl font-bold {% if report.total_profit >= 0 %}text-green-600{% else %}text-red-600{% endif %}">${{ "%.2f"|format(report.total_profit) }}</p>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-sm font-semibold text-gray-700">Report Details</h3>
+      <span class="text-xs text-gray-400">
+        {% if report.period_start %}{{ report.period_start.strftime('%d.%m.%Y') }}{% endif %}
+        {% if report.period_end %} – {{ report.period_end.strftime('%d.%m.%Y') }}{% endif %}
+      </span>
+    </div>
+    {% if report.content %}
+    <div class="prose prose-sm max-w-none text-gray-700 whitespace-pre-line">{{ report.content }}</div>
+    {% else %}
+    <p class="text-sm text-gray-400">No report content</p>
+    {% endif %}
+    <p class="text-xs text-gray-300 mt-4">Created: {{ report.created_at.strftime('%d.%m.%Y %H:%M') if report.created_at else "—" }}</p>
+  </div>
+</div>
+{% endblock %}
