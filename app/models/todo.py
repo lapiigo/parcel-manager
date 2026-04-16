@@ -10,7 +10,7 @@ class TodoProject(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    color = Column(String(7), default="#6366f1")  # hex color
+    color = Column(String(7), default="#6366f1")
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -47,10 +47,8 @@ class TodoTask(Base):
     description = Column(Text, nullable=True)
     project_id = Column(Integer, ForeignKey("todo_projects.id", ondelete="CASCADE"), nullable=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    # backlog | todo | in_progress | done | cancelled
-    status = Column(String(20), default="todo", nullable=False)
-    # low | medium | high | urgent
-    priority = Column(String(10), default="medium", nullable=False)
+    status = Column(String(20), default="todo", nullable=False)   # backlog|todo|in_progress|done|cancelled
+    priority = Column(String(10), default="medium", nullable=False)  # low|medium|high|urgent
     is_idea = Column(Boolean, default=False, nullable=False)
     deadline = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
@@ -59,6 +57,8 @@ class TodoTask(Base):
     project = relationship("TodoProject", back_populates="tasks")
     attachments = relationship("TaskAttachment", back_populates="task",
                                cascade="all, delete-orphan", order_by="TaskAttachment.created_at")
+    reminders = relationship("Reminder", back_populates="task",
+                             cascade="all, delete-orphan", order_by="Reminder.minutes_before")
 
 
 class TaskAttachment(Base):
@@ -84,8 +84,24 @@ class TodoMeeting(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     scheduled_at = Column(DateTime, nullable=False)
     duration_minutes = Column(Integer, default=60)
-    remind_minutes_before = Column(Integer, default=30)
-    telegram_notified = Column(Boolean, default=False)
     created_at = Column(DateTime, server_default=func.now())
 
     project = relationship("TodoProject", back_populates="meetings")
+    reminders = relationship("Reminder", back_populates="meeting",
+                             cascade="all, delete-orphan", order_by="Reminder.minutes_before")
+
+
+class Reminder(Base):
+    """A single Telegram alert linked to either a task (deadline) or a meeting."""
+    __tablename__ = "reminders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    task_id = Column(Integer, ForeignKey("todo_tasks.id", ondelete="CASCADE"), nullable=True)
+    meeting_id = Column(Integer, ForeignKey("todo_meetings.id", ondelete="CASCADE"), nullable=True)
+    minutes_before = Column(Integer, default=0)   # 0 = at event time
+    telegram_notified = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    task = relationship("TodoTask", back_populates="reminders")
+    meeting = relationship("TodoMeeting", back_populates="reminders")

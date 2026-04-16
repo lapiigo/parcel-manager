@@ -73,13 +73,10 @@ def startup():
     # Start background scheduler for Telegram reminders
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
-        from app.services.telegram_service import (
-            check_meeting_reminders, check_deadline_reminders, poll_telegram_updates
-        )
+        from app.services.telegram_service import check_reminders, poll_telegram_updates
         scheduler = BackgroundScheduler()
         scheduler.add_job(poll_telegram_updates, "interval", seconds=10, id="tg_poll")
-        scheduler.add_job(check_meeting_reminders, "interval", minutes=1, id="meeting_reminders")
-        scheduler.add_job(check_deadline_reminders, "cron", hour=9, minute=0, id="deadline_reminders")
+        scheduler.add_job(check_reminders, "interval", minutes=1, id="reminders")
         scheduler.start()
     except Exception as e:
         import logging

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh root@178.104.192.128 \"echo 'TELEGRAM_BOT_TOKEN=8644500919:AAF6Z0dcqs9htiSvQl80l47lLZJuZSEdr-o' >> /opt/parcel-manager/.env && echo 'TELEGRAM_CHAT_ID=' >> /opt/parcel-manager/.env && systemctl restart parcel && echo 'done'\")",
+      "Bash(ssh root@178.104.192.128 \"sleep 3 && systemctl is-active parcel && curl -s http://localhost:8000/todo -o /dev/null -w '%{http_code}'\")"
+    ]
+  }
+}

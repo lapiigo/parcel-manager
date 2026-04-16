@@ -135,9 +135,23 @@
             <option value="todo" selected>To Do</option>
             <option value="in_progress">In Progress</option>
           </select>
-          <input type="datetime-local" name="deadline"
-                 class="col-span-2 border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                 placeholder="Deadline (optional)">
+          <input type="datetime-local" name="deadline" x-ref="quickDeadline"
+                 class="col-span-2 border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        </div>
+        <!-- Reminders (shown only when deadline is set) -->
+        <div x-data="{ hasDeadline: false }" @input.from="$refs.quickDeadline"="hasDeadline = $event.target.value !== ''">
+          <div x-show="$root.querySelector('[name=deadline]').value !== ''" class="mt-1">
+            <p class="text-xs text-gray-500 mb-1.5">🔔 Reminders</p>
+            <div class="flex flex-wrap gap-x-3 gap-y-1">
+              {% for mins, label in reminder_options %}
+              <label class="flex items-center gap-1 cursor-pointer">
+                <input type="checkbox" name="reminder_minutes" value="{{ mins }}"
+                       class="rounded text-indigo-600 w-3.5 h-3.5">
+                <span class="text-xs text-gray-600">{{ label }}</span>
+              </label>
+              {% endfor %}
+            </div>
+          </div>
         </div>
         <div class="flex gap-2">
           <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-4 py-1.5 rounded-lg font-medium transition-colors">Add Task</button>
@@ -191,6 +205,9 @@
             {% if task.attachments %}
             <span class="text-xs text-gray-400">📎 {{ task.attachments|length }}</span>
             {% endif %}
+            {% if task.reminders %}
+            <span class="text-xs text-gray-400">🔔 {{ task.reminders|length }}</span>
+            {% endif %}
           </div>
           {% if task.description %}
           <p x-show="expanded" x-cloak class="text-xs text-gray-500 mt-1.5 whitespace-pre-wrap">{{ task.description }}</p>
@@ -239,6 +256,24 @@
               <input type="datetime-local" name="deadline"
                      value="{{ task.deadline.strftime('%Y-%m-%dT%H:%M') if task.deadline else '' }}"
                      class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            </div>
+            <!-- Reminders -->
+            <div>
+              <p class="text-xs text-gray-500 mb-1.5">🔔 Reminders
+                {% if not task.deadline %}<span class="text-gray-300">(set deadline first)</span>{% endif %}
+              </p>
+              <div class="flex flex-wrap gap-x-3 gap-y-1">
+                {% set existing_mins = task.reminders|map(attribute='minutes_before')|list %}
+                {% for mins, label in reminder_options %}
+                <label class="flex items-center gap-1 cursor-pointer {% if not task.deadline %}opacity-40{% endif %}">
+                  <input type="checkbox" name="reminder_minutes" value="{{ mins }}"
+                         {% if mins in existing_mins %}checked{% endif %}
+                         {% if not task.deadline %}disabled{% endif %}
+                         class="rounded text-indigo-600 w-3.5 h-3.5">
+                  <span class="text-xs text-gray-600">{{ label }}</span>
+                </label>
+                {% endfor %}
+              </div>
             </div>
             <div class="flex gap-2">
               <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-4 py-1.5 rounded-lg font-medium">Save</button>
@@ -503,17 +538,17 @@
         </div>
       </div>
       <div>
-        <label class="block text-xs font-medium text-gray-600 mb-1">Remind before</label>
-        <select name="remind_minutes_before"
-                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
-          <option value="5">5 min</option>
-          <option value="10">10 min</option>
-          <option value="15">15 min</option>
-          <option value="30" selected>30 min</option>
-          <option value="60">1 hour</option>
-          <option value="120">2 hours</option>
-          <option value="1440">1 day</option>
-        </select>
+        <label class="block text-xs font-medium text-gray-600 mb-2">🔔 Reminders</label>
+        <div class="flex flex-wrap gap-x-4 gap-y-2">
+          {% for mins, label in reminder_options %}
+          <label class="flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" name="reminder_minutes" value="{{ mins }}"
+                   {% if mins == 30 %}checked{% endif %}
+                   class="rounded text-blue-600 w-3.5 h-3.5">
+            <span class="text-xs text-gray-600">{{ label }}</span>
+          </label>
+          {% endfor %}
+        </div>
       </div>
       <div class="flex gap-3 pt-2">
         <button type="button" @click="showAddMeeting = false"

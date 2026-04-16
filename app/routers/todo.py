@@ -1,7 +1,7 @@
 import os
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, Request, Form, UploadFile, File, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.auth import require_super_admin, require_admin_up
-from app.models.todo import TodoProject, TodoTask, TaskAttachment, TodoMeeting
+from app.models.todo import TodoProject, TodoTask, TaskAttachment, TodoMeeting, Reminder
 from app.permissions import can
+from app.services.telegram_service import REMINDER_OPTIONS
 
 router = APIRouter(prefix="/todo")
 templates = Jinja2Templates(directory="app/templates")
@@ -112,6 +113,7 @@ def todo_index(
             "project_colors": PROJECT_COLORS,
             "bot_username": bot_username,
             "tg_flash": tg,
+            "reminder_options": REMINDER_OPTIONS,
             "can": can,
         },
     )
@@ -228,6 +230,7 @@ def project_detail(
             "PRIORITY_COLORS": PRIORITY_COLORS,
             "STATUS_COLORS": STATUS_COLORS,
             "STATUS_LABELS": STATUS_LABELS,
+            "reminder_options": REMINDER_OPTIONS,
             "now": now,
             "can": can,
         },
@@ -246,6 +249,7 @@ def create_task(
     is_idea: str = Form("0"),
     deadline: str = Form(""),
     redirect_tab: str = Form("tasks"),
+    reminder_minutes: List[int] = Form(default=[]),
     db: Session = Depends(get_db),
     current_user=Depends(require_admin_up),
 ):
@@ -266,6 +270,10 @@ def create_task(
         deadline=deadline_dt,
     )
     db.add(task)
+    db.flush()  # get task.id
+    if deadline_dt and reminder_minutes:
+        for mins in reminder_minutes:
+            db.add(Reminder(task_id=task.id, user_id=current_user.id, minutes_before=mins))
     db.commit()
     tab = "ideas" if is_idea == "1" else redirect_tab
     return RedirectResponse(f"/todo/projects/{project_id}?tab={tab}", status_code=302)
@@ -297,6 +305,7 @@ def edit_task(
     priority: str = Form("medium"),
     status: str = Form("todo"),
     deadline: str = Form(""),
+    reminder_minutes: List[int] = Form(default=[]),
     db: Session = Depends(get_db),
     current_user=Depends(require_admin_up),
 ):
@@ -315,6 +324,11 @@ def edit_task(
                 pass
         else:
             task.deadline = None
+        # Replace reminders
+        db.query(Reminder).filter(Reminder.task_id == task_id).delete()
+        if task.deadline and reminder_minutes:
+            for mins in reminder_minutes:
+                db.add(Reminder(task_id=task.id, user_id=current_user.id, minutes_before=mins))
         db.commit()
         tab = "ideas" if task.is_idea else "tasks"
         return RedirectResponse(f"/todo/projects/{task.project_id}?tab={tab}", status_code=302)
@@ -402,7 +416,7 @@ def create_meeting(
     description: str = Form(""),
     scheduled_at: str = Form(...),
     duration_minutes: int = Form(60),
-    remind_minutes_before: int = Form(30),
+    reminder_minutes: List[int] = Form(default=[]),
     project_id: str = Form(""),
     redirect_to: str = Form(""),
     db: Session = Depends(get_db),
@@ -418,11 +432,13 @@ def create_meeting(
         description=description.strip() or None,
         scheduled_at=scheduled_dt,
         duration_minutes=duration_minutes,
-        remind_minutes_before=remind_minutes_before,
         project_id=int(project_id) if project_id.isdigit() else None,
         user_id=current_user.id,
     )
     db.add(meeting)
+    db.flush()
+    for mins in reminder_minutes:
+        db.add(Reminder(meeting_id=meeting.id, user_id=current_user.id, minutes_before=mins))
     db.commit()
     if redirect_to:
         return RedirectResponse(redirect_to, status_code=302)
