@@ -8,7 +8,7 @@ from app.database import engine
 import app.models  # register all models with SQLAlchemy
 
 from app.auth import NotAuthenticatedException, ForbiddenException
-from app.routers import auth, dashboard, parcels, suppliers, clients, orders, admin, reports, portal
+from app.routers import auth, dashboard, parcels, suppliers, clients, orders, admin, reports, portal, todo
 
 app = FastAPI(title="Parcel Manager", docs_url=None, redoc_url=None)
 
@@ -60,6 +60,7 @@ app.include_router(orders.router)
 app.include_router(admin.router)
 app.include_router(reports.router)
 app.include_router(portal.router)
+app.include_router(todo.router)
 
 
 # ── DB init (create tables if they don't exist) ───────────────────────────────
@@ -68,6 +69,18 @@ def startup():
     from app.database import Base
     from sqlalchemy import text
     Base.metadata.create_all(bind=engine)
+
+    # Start background scheduler for Telegram reminders
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from app.services.telegram_service import check_meeting_reminders, check_deadline_reminders
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(check_meeting_reminders, "interval", minutes=1, id="meeting_reminders")
+        scheduler.add_job(check_deadline_reminders, "cron", hour=9, minute=0, id="deadline_reminders")
+        scheduler.start()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Scheduler not started: {e}")
     # Add new columns to existing tables if they don't exist (SQLite migration)
     new_columns = [
         ("parcels", "external_order_id", "VARCHAR(255)"),
