@@ -325,7 +325,7 @@
           {% for m in upcoming %}
           <div class="px-4 py-3">
             <p class="text-sm font-medium text-gray-800">{{ m.title }}</p>
-            <p class="text-xs text-indigo-600 mt-0.5">🕐 {{ m.scheduled_at.strftime('%d.%m.%Y %H:%M') }}</p>
+            <p class="text-xs text-indigo-600 mt-0.5">🕐 {{ (m.scheduled_at | to_local(current_user.timezone)).strftime('%d.%m.%Y %H:%M') }}</p>
             {% if m.project %}
             <p class="text-xs text-gray-400 mt-0.5">📁 {{ m.project.name }}</p>
             {% endif %}

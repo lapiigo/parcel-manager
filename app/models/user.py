@@ -19,6 +19,9 @@ class User(Base):
     created_at = Column(DateTime, server_default=func.now())
     last_login = Column(DateTime, nullable=True)
 
+    # Timezone (auto-detected from browser, IANA format e.g. "Europe/Kyiv")
+    timezone = Column(String(50), nullable=True, default="UTC")
+
     # Telegram integration (per-user)
     telegram_chat_id = Column(String(50), nullable=True)
     telegram_token = Column(String(64), nullable=True)       # temporary connect token

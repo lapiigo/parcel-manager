@@ -100,6 +100,7 @@ def startup():
         ("users", "telegram_chat_id", "VARCHAR(50)"),
         ("users", "telegram_token", "VARCHAR(64)"),
         ("users", "telegram_token_expires", "DATETIME"),
+        ("users", "timezone", "VARCHAR(50) DEFAULT 'UTC'"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in new_columns:

@@ -3,6 +3,7 @@ import json
 import uuid
 from datetime import datetime
 from typing import Optional, List
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Request, Form, UploadFile, File, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -17,6 +18,32 @@ from app.services.telegram_service import REMINDER_OPTIONS
 
 router = APIRouter(prefix="/todo")
 templates = Jinja2Templates(directory="app/templates")
+
+
+# ── Timezone helpers ──────────────────────────────────────────────────────────
+
+def _to_local(dt, tz_str="UTC"):
+    """Convert naive UTC datetime to user's timezone (for Jinja2 filter)."""
+    if not dt:
+        return None
+    try:
+        return dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(ZoneInfo(tz_str or "UTC"))
+    except Exception:
+        return dt
+
+
+def _local_to_utc(naive_dt, tz_str):
+    """Convert naive local datetime to naive UTC for storage."""
+    if not naive_dt or not tz_str or tz_str == "UTC":
+        return naive_dt
+    try:
+        local_dt = naive_dt.replace(tzinfo=ZoneInfo(tz_str))
+        return local_dt.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    except Exception:
+        return naive_dt
+
+
+templates.env.filters["to_local"] = _to_local
 
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
 TODO_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "todo")
@@ -161,23 +188,26 @@ def todo_index(
         )
         .all()
     )
+    def _cal_local(dt):
+        return _to_local(dt, current_user.timezone or "UTC")
+
     calendar_events = json.dumps(
         [
             {
-                "date": m.scheduled_at.strftime("%Y-%m-%d"),
+                "date": _cal_local(m.scheduled_at).strftime("%Y-%m-%d"),
                 "title": m.title,
                 "type": "meeting",
-                "time": m.scheduled_at.strftime("%H:%M"),
+                "time": _cal_local(m.scheduled_at).strftime("%H:%M"),
                 "project": m.project.name if m.project else None,
             }
             for m in cal_meetings
         ] + [
             {
-                "date": t.deadline.strftime("%Y-%m-%d"),
+                "date": _cal_local(t.deadline).strftime("%Y-%m-%d"),
                 "title": t.title,
                 "type": "task",
                 "priority": t.priority,
-                "time": t.deadline.strftime("%H:%M"),
+                "time": _cal_local(t.deadline).strftime("%H:%M"),
                 "project": t.project.name if t.project else None,
             }
             for t in cal_tasks
@@ -356,7 +386,7 @@ def create_task(
     deadline_dt = None
     if deadline:
         try:
-            deadline_dt = datetime.fromisoformat(deadline)
+            deadline_dt = _local_to_utc(datetime.fromisoformat(deadline), current_user.timezone)
         except ValueError:
             pass
     task = TodoTask(
@@ -423,7 +453,7 @@ def edit_task(
         task.status = status
         if deadline:
             try:
-                task.deadline = datetime.fromisoformat(deadline)
+                task.deadline = _local_to_utc(datetime.fromisoformat(deadline), current_user.timezone)
             except ValueError:
                 pass
         else:
@@ -535,7 +565,7 @@ def create_meeting(
     current_user=Depends(require_admin_up),
 ):
     try:
-        scheduled_dt = datetime.fromisoformat(scheduled_at)
+        scheduled_dt = _local_to_utc(datetime.fromisoformat(scheduled_at), current_user.timezone)
     except ValueError:
         return RedirectResponse(redirect_to or "/todo", status_code=302)
 
@@ -650,6 +680,22 @@ def edit_note(
         note.color = color if color in NOTE_COLORS else "yellow"
         db.commit()
     return RedirectResponse("/todo?tab=notes", status_code=302)
+
+
+@router.post("/timezone")
+def set_timezone(
+    timezone: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin_up),
+):
+    try:
+        ZoneInfo(timezone)  # validate IANA timezone name
+        current_user.timezone = timezone
+        db.commit()
+    except Exception:
+        pass
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"ok": True})
 
 
 @router.post("/notes/{note_id}/delete")

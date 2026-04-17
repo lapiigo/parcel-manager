@@ -211,12 +211,21 @@ def check_reminders():
             if not user or not user.telegram_chat_id:
                 continue
 
-            time_str = event_time.strftime("%d.%m.%Y %H:%M")
+            try:
+                from zoneinfo import ZoneInfo
+                user_tz = ZoneInfo(user.timezone or "UTC")
+                local_event_time = event_time.replace(tzinfo=ZoneInfo("UTC")).astimezone(user_tz)
+                tz_label = local_event_time.strftime("%Z")
+            except Exception:
+                local_event_time = event_time
+                tz_label = "UTC"
+
+            time_str = local_event_time.strftime("%d.%m.%Y %H:%M")
             when = _mins_label(reminder.minutes_before)
             text = (
                 f"🔔 <b>Reminder</b>\n\n"
                 f"{icon} <b>{event_title}</b>\n"
-                f"⏰ {event_type}: {time_str} UTC\n"
+                f"⏰ {event_type}: {time_str} {tz_label}\n"
                 f"📍 {when.capitalize()}"
             )
             if send_telegram_to_chat(user.telegram_chat_id, text):

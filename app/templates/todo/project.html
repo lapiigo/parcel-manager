@@ -198,8 +198,9 @@
               {{ STATUS_LABELS[task.status] }}
             </span>
             {% if task.deadline %}
+            {% set local_dl = task.deadline | to_local(current_user.timezone) %}
             <span class="text-xs {% if task.deadline < now and task.status not in ['done','cancelled'] %}text-red-600 font-semibold{% else %}text-gray-400{% endif %}">
-              📅 {{ task.deadline.strftime('%d.%m.%Y %H:%M') }}
+              📅 {{ local_dl.strftime('%d.%m.%Y %H:%M') }}
             </span>
             {% endif %}
             {% if task.attachments %}
@@ -254,7 +255,7 @@
                 {% endfor %}
               </select>
               <input type="datetime-local" name="deadline"
-                     value="{{ task.deadline.strftime('%Y-%m-%dT%H:%M') if task.deadline else '' }}"
+                     value="{{ (task.deadline | to_local(current_user.timezone)).strftime('%Y-%m-%dT%H:%M') if task.deadline else '' }}"
                      class="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400">
             </div>
             <!-- Reminders -->
@@ -416,13 +417,14 @@
   <div class="space-y-3">
     {% for m in meetings %}
     <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex items-start gap-4">
+      {% set m_local = m.scheduled_at | to_local(current_user.timezone) %}
       <div class="text-center bg-blue-50 rounded-xl p-3 shrink-0">
-        <p class="text-lg font-bold text-blue-700">{{ m.scheduled_at.strftime('%d') }}</p>
-        <p class="text-xs text-blue-500 font-medium">{{ m.scheduled_at.strftime('%b') }}</p>
+        <p class="text-lg font-bold text-blue-700">{{ m_local.strftime('%d') }}</p>
+        <p class="text-xs text-blue-500 font-medium">{{ m_local.strftime('%b') }}</p>
       </div>
       <div class="flex-1 min-w-0">
         <p class="text-sm font-semibold text-gray-800">{{ m.title }}</p>
-        <p class="text-xs text-gray-500 mt-0.5">🕐 {{ m.scheduled_at.strftime('%H:%M') }} · {{ m.duration_minutes }} min · remind {{ m.remind_minutes_before }}m before</p>
+        <p class="text-xs text-gray-500 mt-0.5">🕐 {{ m_local.strftime('%H:%M') }} · {{ m.duration_minutes }} min{% if m.reminders %} · 🔔 {{ m.reminders|length }}{% endif %}</p>
         {% if m.description %}
         <p class="text-xs text-gray-400 mt-1">{{ m.description }}</p>
         {% endif %}

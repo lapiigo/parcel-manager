@@ -177,5 +177,22 @@
     </main>
   </div>
 </div>
+{% if current_user is defined and current_user and current_user.role in ['super_admin', 'admin'] %}
+<script>
+(function() {
+  try {
+    var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!tz) return;
+    var key = 'tz_v1_{{ current_user.id }}';
+    if (localStorage.getItem(key) === tz) return;
+    fetch('/todo/timezone', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: 'timezone=' + encodeURIComponent(tz)
+    }).then(function(r) { if (r.ok) localStorage.setItem(key, tz); });
+  } catch(e) {}
+})();
+</script>
+{% endif %}
 </body>
 </html>
