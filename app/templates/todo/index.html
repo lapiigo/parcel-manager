@@ -26,6 +26,13 @@
   editNoteTitle: '',
   editNoteContent: '',
   editNoteColor: 'yellow',
+  editInboxId: null,
+  editInboxTitle: '',
+  editInboxDesc: '',
+  editInboxPriority: 'medium',
+  editInboxStatus: 'todo',
+  editInboxDeadline: '',
+  editInboxIsIdea: false,
 }"
 @open-new-project.window="showNewProject = true"
 @open-new-meeting.window="showNewMeeting = true">
@@ -497,6 +504,7 @@
     <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Tasks ({{ inbox_tasks|length }})</h3>
     <div class="space-y-2">
       {% for task in inbox_tasks %}
+      {% set local_dl = (task.deadline | to_local(current_user.timezone)) if task.deadline else none %}
       <div class="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-3 flex items-start gap-3">
         <!-- Status toggle -->
         <form method="post" action="/todo/tasks/{{ task.id }}/status" class="pt-0.5 shrink-0">
@@ -515,20 +523,29 @@
             <span class="text-sm font-medium text-gray-800 {{ 'line-through text-gray-400' if task.status == 'done' }}">{{ task.title }}</span>
             <span class="text-xs px-1.5 py-0.5 rounded font-medium {{ PRIORITY_COLORS.get(task.priority, '') }}">{{ task.priority }}</span>
             <span class="text-xs px-1.5 py-0.5 rounded font-medium {{ STATUS_COLORS.get(task.status, '') }}">{{ STATUS_LABELS.get(task.status, task.status) }}</span>
-            {% if task.reminders %}
-            <span class="text-xs text-blue-500">🔔 {{ task.reminders|length }}</span>
-            {% endif %}
+            {% if task.reminders %}<span class="text-xs text-blue-500">🔔 {{ task.reminders|length }}</span>{% endif %}
           </div>
           {% if task.description %}
-          <p class="text-xs text-gray-500 mt-0.5 line-clamp-2">{{ task.description }}</p>
+          <p class="text-xs text-gray-500 mt-0.5">{{ task.description }}</p>
           {% endif %}
-          {% if task.deadline %}
-          <p class="text-xs text-red-500 mt-0.5">⏰ {{ task.deadline.strftime('%d.%m.%Y %H:%M') }}</p>
+          {% if local_dl %}
+          <p class="text-xs mt-0.5 {{ 'text-red-500 font-semibold' if task.deadline < now and task.status not in ['done','cancelled'] else 'text-gray-400' }}">
+            ⏰ {{ local_dl.strftime('%d.%m.%Y %H:%M') }}
+          </p>
           {% endif %}
         </div>
 
-        <div class="flex gap-1 shrink-0" x-data="{ showEdit: false }">
-          <button @click="showEdit = !showEdit" class="text-gray-400 hover:text-gray-600 p-1 rounded">
+        <div class="flex gap-1 shrink-0">
+          <button
+            data-id="{{ task.id }}"
+            data-title="{{ task.title | e }}"
+            data-desc="{{ task.description | e if task.description else '' }}"
+            data-priority="{{ task.priority }}"
+            data-status="{{ task.status }}"
+            data-deadline="{{ local_dl.strftime('%Y-%m-%dT%H:%M') if local_dl else '' }}"
+            data-is-idea="0"
+            @click="let d=$el.dataset; editInboxId=d.id; editInboxTitle=d.title; editInboxDesc=d.desc; editInboxPriority=d.priority; editInboxStatus=d.status; editInboxDeadline=d.deadline; editInboxIsIdea=false;"
+            class="text-gray-400 hover:text-gray-600 p-1 rounded">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
           </button>
           <form method="post" action="/todo/tasks/{{ task.id }}/delete" class="inline">
@@ -536,13 +553,7 @@
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
             </button>
           </form>
-
-          <!-- Inline edit form -->
-          <div x-show="showEdit" x-cloak
-               class="absolute mt-8 right-0 z-20 bg-white rounded-xl border border-gray-200 shadow-xl p-4 w-80">
-          </div>
         </div>
-
       </div>
       {% endfor %}
     </div>
@@ -558,16 +569,30 @@
       <div class="bg-purple-50 rounded-xl border border-purple-100 shadow-sm px-4 py-3 flex items-start gap-3">
         <span class="text-lg shrink-0 pt-0.5">💡</span>
         <div class="flex-1 min-w-0">
-          <span class="text-sm font-medium text-gray-800">{{ task.title }}</span>
+          <p class="text-sm font-medium text-gray-800">{{ task.title }}</p>
           {% if task.description %}
-          <p class="text-xs text-gray-500 mt-0.5 line-clamp-2">{{ task.description }}</p>
+          <p class="text-xs text-gray-500 mt-0.5 whitespace-pre-wrap">{{ task.description }}</p>
           {% endif %}
         </div>
-        <form method="post" action="/todo/tasks/{{ task.id }}/delete" class="inline shrink-0">
-          <button type="submit" onclick="return confirm('Delete idea?')" class="text-gray-400 hover:text-red-500 p-1 rounded">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+        <div class="flex gap-1 shrink-0">
+          <button
+            data-id="{{ task.id }}"
+            data-title="{{ task.title | e }}"
+            data-desc="{{ task.description | e if task.description else '' }}"
+            data-priority="medium"
+            data-status="todo"
+            data-deadline=""
+            data-is-idea="1"
+            @click="let d=$el.dataset; editInboxId=d.id; editInboxTitle=d.title; editInboxDesc=d.desc; editInboxPriority=d.priority; editInboxStatus=d.status; editInboxDeadline=d.deadline; editInboxIsIdea=true;"
+            class="text-gray-400 hover:text-purple-600 p-1 rounded">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
           </button>
-        </form>
+          <form method="post" action="/todo/tasks/{{ task.id }}/delete" class="inline">
+            <button type="submit" onclick="return confirm('Delete idea?')" class="text-gray-400 hover:text-red-500 p-1 rounded">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            </button>
+          </form>
+        </div>
       </div>
       {% endfor %}
     </div>
@@ -877,6 +902,102 @@
                 class="flex-1 bg-green-600 hover:bg-green-700 text-white text-sm py-2 rounded-lg font-medium transition-colors">Add</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- Edit Inbox Item Modal (tasks & ideas) -->
+<div x-show="editInboxId !== null" x-cloak
+     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50"
+     @click.self="editInboxId = null">
+  <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto" @click.stop>
+    <div class="flex items-center justify-between mb-5">
+      <h3 class="text-lg font-bold text-gray-800" x-text="editInboxIsIdea ? '💡 Edit Idea' : '📋 Edit Task'"></h3>
+      <button @click="editInboxId = null" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <template x-if="editInboxId">
+      <form :action="'/todo/tasks/' + editInboxId + '/edit'" method="post" class="space-y-4"
+            x-data="{ hasDeadline: editInboxDeadline !== '' }">
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Title *</label>
+          <input type="text" name="title" x-model="editInboxTitle" required
+                 class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Description</label>
+          <textarea name="description" rows="3" x-model="editInboxDesc"
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"></textarea>
+        </div>
+
+        <!-- Task-only fields -->
+        <template x-if="!editInboxIsIdea">
+          <div class="space-y-4">
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-gray-600 mb-1">Priority</label>
+                <select name="priority" x-model="editInboxPriority"
+                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-600 mb-1">Status</label>
+                <select name="status" x-model="editInboxStatus"
+                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                  <option value="backlog">Backlog</option>
+                  <option value="todo">To Do</option>
+                  <option value="in_progress">In Progress</option>
+                  <option value="done">Done</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label class="flex items-center gap-2 cursor-pointer text-sm text-gray-600 mb-2">
+                <input type="checkbox" x-model="hasDeadline" class="rounded text-indigo-600">
+                Set deadline
+              </label>
+              <input x-show="hasDeadline" type="datetime-local" name="deadline"
+                     x-model="editInboxDeadline"
+                     class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+              <input x-show="!hasDeadline" type="hidden" name="deadline" value="">
+            </div>
+            <div x-show="hasDeadline">
+              <label class="block text-xs font-medium text-gray-600 mb-2">🔔 Reminders</label>
+              <div class="flex flex-wrap gap-x-4 gap-y-2">
+                {% for mins, label in reminder_options %}
+                <label class="flex items-center gap-1.5 cursor-pointer">
+                  <input type="checkbox" name="reminder_minutes" value="{{ mins }}"
+                         class="rounded text-indigo-600 w-3.5 h-3.5">
+                  <span class="text-xs text-gray-600">{{ label }}</span>
+                </label>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- Idea: keep status/priority hidden with defaults -->
+        <template x-if="editInboxIsIdea">
+          <div>
+            <input type="hidden" name="priority" value="medium">
+            <input type="hidden" name="status" value="todo">
+            <input type="hidden" name="deadline" value="">
+          </div>
+        </template>
+
+        <div class="flex gap-3 pt-2">
+          <button type="button" @click="editInboxId = null"
+                  class="flex-1 border border-gray-200 text-gray-600 text-sm py-2 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+          <button type="submit"
+                  class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-sm py-2 rounded-lg font-medium transition-colors">Save</button>
+        </div>
+      </form>
+    </template>
   </div>
 </div>
 
