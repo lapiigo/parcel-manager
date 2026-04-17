@@ -105,3 +105,16 @@ class Reminder(Base):
 
     task = relationship("TodoTask", back_populates="reminders")
     meeting = relationship("TodoMeeting", back_populates="reminders")
+
+
+class Note(Base):
+    """Simple freeform note / idea / reminder not tied to any project."""
+    __tablename__ = "notes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255), nullable=True)
+    content = Column(Text, nullable=True)
+    color = Column(String(20), default="yellow")  # yellow|green|blue|pink|purple|white
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

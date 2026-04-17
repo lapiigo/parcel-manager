@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.auth import require_super_admin, require_admin_up
-from app.models.todo import TodoProject, TodoTask, TaskAttachment, TodoMeeting, Reminder
+from app.models.todo import TodoProject, TodoTask, TaskAttachment, TodoMeeting, Reminder, Note
 from app.permissions import can
 from app.services.telegram_service import REMINDER_OPTIONS
 
@@ -47,6 +47,23 @@ PROJECT_COLORS = [
     "#3b82f6", "#06b6d4", "#64748b", "#1e293b",
 ]
 
+NOTE_COLORS = {
+    "yellow": "bg-yellow-50 border-yellow-200",
+    "green":  "bg-green-50 border-green-200",
+    "blue":   "bg-blue-50 border-blue-200",
+    "pink":   "bg-pink-50 border-pink-200",
+    "purple": "bg-purple-100 border-purple-200",
+    "white":  "bg-white border-gray-200",
+}
+NOTE_DOT_COLORS = {
+    "yellow": "bg-yellow-400",
+    "green":  "bg-green-400",
+    "blue":   "bg-blue-400",
+    "pink":   "bg-pink-400",
+    "purple": "bg-purple-400",
+    "white":  "bg-gray-300",
+}
+
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
@@ -54,6 +71,7 @@ PROJECT_COLORS = [
 def todo_index(
     request: Request,
     tg: str = Query(""),
+    tab: str = Query("overview"),
     db: Session = Depends(get_db),
     current_user=Depends(require_admin_up),
 ):
@@ -98,6 +116,34 @@ def todo_index(
         TodoTask.is_idea == False,
         TodoTask.status.in_(["todo", "in_progress", "backlog"]),
     ).count()
+    # Notes (not tied to any project)
+    notes = (
+        db.query(Note)
+        .filter(Note.user_id == current_user.id)
+        .order_by(Note.updated_at.desc())
+        .all()
+    )
+    # Inbox: standalone tasks / ideas (no project)
+    inbox_tasks = (
+        db.query(TodoTask)
+        .filter(
+            TodoTask.user_id == current_user.id,
+            TodoTask.project_id == None,
+            TodoTask.is_idea == False,
+        )
+        .order_by(TodoTask.created_at.desc())
+        .all()
+    )
+    inbox_ideas = (
+        db.query(TodoTask)
+        .filter(
+            TodoTask.user_id == current_user.id,
+            TodoTask.project_id == None,
+            TodoTask.is_idea == True,
+        )
+        .order_by(TodoTask.created_at.desc())
+        .all()
+    )
     from app.services.telegram_service import get_bot_username
     bot_username = get_bot_username()
 
@@ -110,10 +156,19 @@ def todo_index(
             "due_soon": due_soon,
             "total_tasks": total_tasks,
             "active_tasks": active_tasks,
+            "notes": notes,
+            "inbox_tasks": inbox_tasks,
+            "inbox_ideas": inbox_ideas,
+            "active_tab": tab,
             "project_colors": PROJECT_COLORS,
+            "note_colors": NOTE_COLORS,
+            "note_dot_colors": NOTE_DOT_COLORS,
             "bot_username": bot_username,
             "tg_flash": tg,
             "reminder_options": REMINDER_OPTIONS,
+            "STATUS_COLORS": STATUS_COLORS,
+            "STATUS_LABELS": STATUS_LABELS,
+            "PRIORITY_COLORS": PRIORITY_COLORS,
             "can": can,
         },
     )
@@ -241,7 +296,7 @@ def project_detail(
 
 @router.post("/tasks/create")
 def create_task(
-    project_id: int = Form(...),
+    project_id: Optional[str] = Form(None),
     title: str = Form(...),
     description: str = Form(""),
     priority: str = Form("medium"),
@@ -253,6 +308,10 @@ def create_task(
     db: Session = Depends(get_db),
     current_user=Depends(require_admin_up),
 ):
+    project_id_int: Optional[int] = None
+    if project_id and str(project_id).strip().isdigit():
+        project_id_int = int(project_id)
+
     deadline_dt = None
     if deadline:
         try:
@@ -262,7 +321,7 @@ def create_task(
     task = TodoTask(
         title=title.strip(),
         description=description.strip() or None,
-        project_id=project_id,
+        project_id=project_id_int,
         user_id=current_user.id,
         status=status,
         priority=priority,
@@ -275,8 +334,10 @@ def create_task(
         for mins in reminder_minutes:
             db.add(Reminder(task_id=task.id, user_id=current_user.id, minutes_before=mins))
     db.commit()
-    tab = "ideas" if is_idea == "1" else redirect_tab
-    return RedirectResponse(f"/todo/projects/{project_id}?tab={tab}", status_code=302)
+    if project_id_int:
+        tab = "ideas" if is_idea == "1" else redirect_tab
+        return RedirectResponse(f"/todo/projects/{project_id_int}?tab={tab}", status_code=302)
+    return RedirectResponse("/todo?tab=inbox", status_code=302)
 
 
 @router.post("/tasks/{task_id}/status")
@@ -292,8 +353,10 @@ def update_task_status(
     if task:
         task.status = new_status
         db.commit()
-        tab = "ideas" if task.is_idea else "tasks"
-        return RedirectResponse(f"/todo/projects/{task.project_id}?tab={tab}", status_code=302)
+        if task.project_id:
+            tab = "ideas" if task.is_idea else "tasks"
+            return RedirectResponse(f"/todo/projects/{task.project_id}?tab={tab}", status_code=302)
+        return RedirectResponse("/todo?tab=inbox", status_code=302)
     return RedirectResponse("/todo", status_code=302)
 
 
@@ -330,8 +393,10 @@ def edit_task(
             for mins in reminder_minutes:
                 db.add(Reminder(task_id=task.id, user_id=current_user.id, minutes_before=mins))
         db.commit()
-        tab = "ideas" if task.is_idea else "tasks"
-        return RedirectResponse(f"/todo/projects/{task.project_id}?tab={tab}", status_code=302)
+        if task.project_id:
+            tab = "ideas" if task.is_idea else "tasks"
+            return RedirectResponse(f"/todo/projects/{task.project_id}?tab={tab}", status_code=302)
+        return RedirectResponse("/todo?tab=inbox", status_code=302)
     return RedirectResponse("/todo", status_code=302)
 
 
@@ -349,8 +414,10 @@ def delete_task(
         is_idea = task.is_idea
         db.delete(task)
         db.commit()
-        tab = "ideas" if is_idea else "tasks"
-        return RedirectResponse(f"/todo/projects/{project_id}?tab={tab}", status_code=302)
+        if project_id:
+            tab = "ideas" if is_idea else "tasks"
+            return RedirectResponse(f"/todo/projects/{project_id}?tab={tab}", status_code=302)
+        return RedirectResponse("/todo?tab=inbox", status_code=302)
     return RedirectResponse("/todo", status_code=302)
 
 
@@ -382,8 +449,10 @@ async def upload_attachment(
     )
     db.add(att)
     db.commit()
-    tab = "ideas" if task.is_idea else "tasks"
-    return RedirectResponse(f"/todo/projects/{task.project_id}?tab={tab}", status_code=302)
+    if task.project_id:
+        tab = "ideas" if task.is_idea else "tasks"
+        return RedirectResponse(f"/todo/projects/{task.project_id}?tab={tab}", status_code=302)
+    return RedirectResponse("/todo?tab=inbox", status_code=302)
 
 
 @router.post("/attachments/{att_id}/delete")
@@ -403,8 +472,10 @@ def delete_attachment(
             pass
         db.delete(att)
         db.commit()
-        tab = "ideas" if is_idea else "tasks"
-        return RedirectResponse(f"/todo/projects/{project_id}?tab={tab}", status_code=302)
+        if project_id:
+            tab = "ideas" if is_idea else "tasks"
+            return RedirectResponse(f"/todo/projects/{project_id}?tab={tab}", status_code=302)
+        return RedirectResponse("/todo?tab=inbox", status_code=302)
     return RedirectResponse("/todo", status_code=302)
 
 
@@ -497,3 +568,59 @@ def telegram_disconnect(
     current_user.telegram_token_expires = None
     db.commit()
     return RedirectResponse("/todo?tg=disconnected", status_code=302)
+
+
+# ── Notes ─────────────────────────────────────────────────────────────────────
+
+@router.post("/notes/create")
+def create_note(
+    title: str = Form(""),
+    content: str = Form(""),
+    color: str = Form("yellow"),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin_up),
+):
+    note = Note(
+        title=title.strip() or None,
+        content=content.strip() or None,
+        color=color if color in NOTE_COLORS else "yellow",
+        user_id=current_user.id,
+    )
+    db.add(note)
+    db.commit()
+    return RedirectResponse("/todo?tab=notes", status_code=302)
+
+
+@router.post("/notes/{note_id}/edit")
+def edit_note(
+    note_id: int,
+    title: str = Form(""),
+    content: str = Form(""),
+    color: str = Form("yellow"),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin_up),
+):
+    note = db.query(Note).filter(
+        Note.id == note_id, Note.user_id == current_user.id
+    ).first()
+    if note:
+        note.title = title.strip() or None
+        note.content = content.strip() or None
+        note.color = color if color in NOTE_COLORS else "yellow"
+        db.commit()
+    return RedirectResponse("/todo?tab=notes", status_code=302)
+
+
+@router.post("/notes/{note_id}/delete")
+def delete_note(
+    note_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin_up),
+):
+    note = db.query(Note).filter(
+        Note.id == note_id, Note.user_id == current_user.id
+    ).first()
+    if note:
+        db.delete(note)
+        db.commit()
+    return RedirectResponse("/todo?tab=notes", status_code=302)

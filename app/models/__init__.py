@@ -6,7 +6,7 @@ from app.models.parcel import Parcel, ParcelPhoto, ParcelComment, ParcelStatusLo
 from app.models.order import Order
 from app.models.report import Report
 from app.models.wishlist import WishlistItem, ClientShipXAddress
-from app.models.todo import TodoProject, TodoTask, TaskAttachment, TodoMeeting, Reminder
+from app.models.todo import TodoProject, TodoTask, TaskAttachment, TodoMeeting, Reminder, Note
 
 __all__ = [
     "Supplier",
@@ -26,4 +26,5 @@ __all__ = [
     "TaskAttachment",
     "TodoMeeting",
     "Reminder",
+    "Note",
 ]
