@@ -5,7 +5,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.auth import require_admin_up
+from app.auth import require_manager_up
 from app.models.report import Report
 from app.models.client import Client
 from app.models.order import Order
@@ -36,8 +36,10 @@ def _clients_for_user(db, current_user):
 def report_list(
     request: Request,
     db: Session = Depends(get_db),
-    current_user=Depends(require_admin_up),
+    current_user=Depends(require_manager_up),
 ):
+    if not can(current_user, "view_reports"):
+        return RedirectResponse("/dashboard", status_code=302)
     reports = _reports_query(db, current_user).order_by(Report.created_at.desc()).all()
     clients = _clients_for_user(db, current_user)
     return templates.TemplateResponse(
@@ -53,8 +55,10 @@ def report_list(
 def report_new(
     request: Request,
     db: Session = Depends(get_db),
-    current_user=Depends(require_admin_up),
+    current_user=Depends(require_manager_up),
 ):
+    if not can(current_user, "view_reports"):
+        return RedirectResponse("/dashboard", status_code=302)
     clients = _clients_for_user(db, current_user)
     return templates.TemplateResponse(
         request,
@@ -74,7 +78,7 @@ def report_create(
     period_end: str = Form(""),
     content: str = Form(""),
     db: Session = Depends(get_db),
-    current_user=Depends(require_admin_up),
+    current_user=Depends(require_manager_up),
 ):
     start = datetime.strptime(period_start, "%Y-%m-%d") if period_start else None
     end = datetime.strptime(period_end, "%Y-%m-%d") if period_end else None
@@ -113,7 +117,7 @@ def report_detail(
     request: Request,
     report_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_admin_up),
+    current_user=Depends(require_manager_up),
 ):
     report = db.query(Report).filter(Report.id == report_id).first()
     if not report:
@@ -137,7 +141,7 @@ def report_edit(
     title: str = Form(...),
     content: str = Form(""),
     db: Session = Depends(get_db),
-    current_user=Depends(require_admin_up),
+    current_user=Depends(require_manager_up),
 ):
     report = db.query(Report).filter(Report.id == report_id).first()
     if report:
@@ -153,7 +157,7 @@ def report_delete(
     request: Request,
     report_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_admin_up),
+    current_user=Depends(require_manager_up),
 ):
     if not can(current_user, "delete_report"):
         return RedirectResponse("/reports", status_code=302)

@@ -48,6 +48,8 @@ def parcel_list(
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
+    if not can(current_user, "view_parcels"):
+        return RedirectResponse("/dashboard", status_code=302)
     query = _company_query(db, current_user)
     if status:
         query = query.filter(Parcel.status == status)

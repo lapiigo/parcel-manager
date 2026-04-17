@@ -108,6 +108,19 @@ def delete_session(token: str, db: Session):
 
 # Role shortcuts
 require_super_admin = require_role("super_admin")
-require_admin_up = require_role("super_admin", "admin")
-require_manager_up = require_role("super_admin", "admin", "manager")
-require_any = require_role("super_admin", "admin", "manager", "client")
+# Any non-client logged-in user (permission checks happen inside routes via can())
+require_manager_up = require_role("super_admin", "admin", "manager", "staff")
+
+# Admin-level: super_admin, legacy admin, or staff with view_users permission
+def require_admin_up(request: Request, db: Session = Depends(get_db)):
+    from app.permissions import can
+    user = get_current_user(request, db)
+    if not user:
+        raise NotAuthenticatedException()
+    if user.role in ("super_admin", "admin"):
+        return user
+    if user.role in ("staff", "manager") and can(user, "view_users"):
+        return user
+    raise ForbiddenException()
+
+require_any = require_role("super_admin", "admin", "manager", "staff", "client")

@@ -1,19 +1,22 @@
+import json
 from fastapi import APIRouter, Depends, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from typing import List
 
 from app.database import get_db
 from app.auth import require_admin_up
 from app.models.user import User
 from app.models.client import Client
 from app.services.auth_service import create_user, hash_password
-from app.permissions import can, ROLE_LABELS, ROLE_BADGE_COLORS
+from app.permissions import can, ROLE_LABELS, ROLE_BADGE_COLORS, PERMISSION_GROUPS
 
 router = APIRouter(prefix="/admin")
 templates = Jinja2Templates(directory="app/templates")
+templates.env.filters["from_json"] = lambda s: json.loads(s or "[]")
 
-ROLES = ["super_admin", "admin", "manager", "client"]
+ROLES = ["super_admin", "staff", "client"]
 
 
 @router.get("/users", response_class=HTMLResponse)
@@ -31,7 +34,7 @@ def user_list(
             "users": users,
             "ROLE_LABELS": ROLE_LABELS,
             "ROLE_BADGE_COLORS": ROLE_BADGE_COLORS,
-            "can": can
+            "can": can,
         },
     )
 
@@ -52,8 +55,10 @@ def user_new(
             "clients": clients,
             "ROLES": ROLES,
             "ROLE_LABELS": ROLE_LABELS,
+            "PERMISSION_GROUPS": PERMISSION_GROUPS,
+            "user_perms": [],
             "error": "",
-            "can": can
+            "can": can,
         },
     )
 
@@ -65,14 +70,14 @@ def user_create(
     full_name: str = Form(""),
     email: str = Form(""),
     password: str = Form(...),
-    role: str = Form("manager"),
+    role: str = Form("staff"),
     client_id: str = Form(""),
+    permissions: List[str] = Form(default=[]),
     db: Session = Depends(get_db),
     current_user=Depends(require_admin_up),
 ):
-    # Only super_admin can create super_admin users
     if role == "super_admin" and current_user.role != "super_admin":
-        role = "admin"
+        role = "staff"
 
     existing = db.query(User).filter(User.username == username).first()
     if existing:
@@ -86,11 +91,14 @@ def user_create(
                 "clients": clients,
                 "ROLES": ROLES,
                 "ROLE_LABELS": ROLE_LABELS,
+                "PERMISSION_GROUPS": PERMISSION_GROUPS,
+                "user_perms": permissions,
                 "error": f"User '{username}' already exists",
-                "can": can
+                "can": can,
             },
         )
 
+    perms_json = json.dumps(permissions) if role == "staff" else None
     create_user(
         db,
         username=username.strip(),
@@ -99,6 +107,7 @@ def user_create(
         full_name=full_name.strip(),
         email=email.strip(),
         client_id=int(client_id) if client_id else None,
+        permissions=perms_json,
     )
     return RedirectResponse("/admin/users", status_code=302)
 
@@ -114,6 +123,10 @@ def user_edit_page(
     if not user:
         return RedirectResponse("/admin/users", status_code=302)
     clients = db.query(Client).order_by(Client.name).all()
+    try:
+        user_perms = json.loads(user.permissions or "[]")
+    except Exception:
+        user_perms = []
     return templates.TemplateResponse(
         request,
         "admin/user_form.html",
@@ -123,8 +136,10 @@ def user_edit_page(
             "clients": clients,
             "ROLES": ROLES,
             "ROLE_LABELS": ROLE_LABELS,
+            "PERMISSION_GROUPS": PERMISSION_GROUPS,
+            "user_perms": user_perms,
             "error": "",
-            "can": can
+            "can": can,
         },
     )
 
@@ -135,10 +150,11 @@ def user_edit(
     user_id: int,
     full_name: str = Form(""),
     email: str = Form(""),
-    role: str = Form("manager"),
+    role: str = Form("staff"),
     client_id: str = Form(""),
     is_active: str = Form("on"),
     new_password: str = Form(""),
+    permissions: List[str] = Form(default=[]),
     db: Session = Depends(get_db),
     current_user=Depends(require_admin_up),
 ):
@@ -146,19 +162,17 @@ def user_edit(
     if not user:
         return RedirectResponse("/admin/users", status_code=302)
 
-    # Prevent admin from editing super_admin (unless self is super_admin)
     if user.role == "super_admin" and current_user.role != "super_admin":
         return RedirectResponse("/admin/users", status_code=302)
-
-    # Only super_admin can set super_admin role
     if role == "super_admin" and current_user.role != "super_admin":
-        role = "admin"
+        role = "staff"
 
     user.full_name = full_name.strip() or None
     user.email = email.strip() or None
     user.role = role
     user.client_id = int(client_id) if client_id else None
     user.is_active = is_active == "on"
+    user.permissions = json.dumps(permissions) if role == "staff" else None
     if new_password:
         user.password_hash = hash_password(new_password)
     db.commit()

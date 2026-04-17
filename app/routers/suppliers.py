@@ -30,6 +30,8 @@ def supplier_list(
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
+    if not can(current_user, "view_suppliers"):
+        return RedirectResponse("/dashboard", status_code=302)
     suppliers = db.query(Supplier).order_by(Supplier.name).all()
     return templates.TemplateResponse(
         request,

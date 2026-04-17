@@ -26,6 +26,8 @@ def client_list(
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
+    if not can(current_user, "view_clients"):
+        return RedirectResponse("/dashboard", status_code=302)
     clients = db.query(Client).order_by(Client.name).all()
     return templates.TemplateResponse(
         request, "clients/list.html",

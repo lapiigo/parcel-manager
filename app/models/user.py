@@ -22,6 +22,10 @@ class User(Base):
     # Timezone (auto-detected from browser, IANA format e.g. "Europe/Kyiv")
     timezone = Column(String(50), nullable=True, default="UTC")
 
+    # Per-user permissions: JSON list of permission keys, e.g. ["view_parcels","edit_parcel"]
+    # Ignored for super_admin and client roles.
+    permissions = Column(Text, nullable=True)
+
     # Telegram integration (per-user)
     telegram_chat_id = Column(String(50), nullable=True)
     telegram_token = Column(String(64), nullable=True)       # temporary connect token

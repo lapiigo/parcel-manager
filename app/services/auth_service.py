@@ -36,6 +36,7 @@ def create_user(
     full_name: str = "",
     email: str = "",
     client_id: int = None,
+    permissions: str = None,
 ) -> User:
     user = User(
         username=username,
@@ -44,6 +45,7 @@ def create_user(
         full_name=full_name,
         email=email or None,
         client_id=client_id,
+        permissions=permissions,
     )
     db.add(user)
     db.commit()
