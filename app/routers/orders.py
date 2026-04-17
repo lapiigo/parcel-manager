@@ -38,6 +38,13 @@ ORDER_STATUS_COLORS = {
 }
 
 
+def _order_company_query(db, current_user):
+    q = db.query(Order)
+    if current_user.role != "super_admin" and current_user.client_id:
+        q = q.filter(Order.client_id == current_user.client_id)
+    return q
+
+
 @router.get("", response_class=HTMLResponse)
 def order_list(
     request: Request,
@@ -46,7 +53,7 @@ def order_list(
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
-    query = db.query(Order)
+    query = _order_company_query(db, current_user)
     if platform:
         query = query.filter(Order.platform == platform)
     if status:
@@ -71,14 +78,30 @@ def order_list(
     )
 
 
+def _warehouse_parcels(db, current_user):
+    q = db.query(Parcel).filter(Parcel.status == "in_warehouse")
+    if current_user.role != "super_admin" and current_user.client_id:
+        q = q.filter(Parcel.client_id == current_user.client_id)
+    return q.all()
+
+
+def _clients_for_user(db, current_user):
+    if current_user.role == "super_admin":
+        return db.query(Client).order_by(Client.name).all()
+    if current_user.client_id:
+        c = db.query(Client).filter(Client.id == current_user.client_id).first()
+        return [c] if c else []
+    return []
+
+
 @router.get("/new", response_class=HTMLResponse)
 def order_new(
     request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
-    warehouse_parcels = db.query(Parcel).filter(Parcel.status == "in_warehouse").all()
-    clients = db.query(Client).order_by(Client.name).all()
+    warehouse_parcels = _warehouse_parcels(db, current_user)
+    clients = _clients_for_user(db, current_user)
     return templates.TemplateResponse(
         request,
         "orders/form.html",
@@ -112,11 +135,17 @@ def order_create(
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
+    # Non-super_admin always uses their own company
+    if current_user.role != "super_admin" and current_user.client_id:
+        resolved_client_id = current_user.client_id
+    else:
+        resolved_client_id = int(client_id) if client_id else None
+
     data = {
         "order_number": order_number.strip(),
         "platform": platform,
         "parcel_id": int(parcel_id) if parcel_id else None,
-        "client_id": int(client_id) if client_id else None,
+        "client_id": resolved_client_id,
         "sale_price": sale_price,
         "platform_commission": platform_commission,
         "shipping_cost": shipping_cost,
@@ -127,8 +156,8 @@ def order_create(
     }
     order, msg = create_order(db, data, actor=current_user.full_name or current_user.username)
     if not order:
-        warehouse_parcels = db.query(Parcel).filter(Parcel.status == "in_warehouse").all()
-        clients = db.query(Client).order_by(Client.name).all()
+        warehouse_parcels = _warehouse_parcels(db, current_user)
+        clients = _clients_for_user(db, current_user)
         return templates.TemplateResponse(
             request,
             "orders/form.html",
@@ -156,8 +185,10 @@ def order_detail(
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         return RedirectResponse("/orders", status_code=302)
-    warehouse_parcels = db.query(Parcel).filter(Parcel.status == "in_warehouse").all()
-    clients = db.query(Client).order_by(Client.name).all()
+    if current_user.role != "super_admin" and current_user.client_id and order.client_id != current_user.client_id:
+        return RedirectResponse("/orders", status_code=302)
+    warehouse_parcels = _warehouse_parcels(db, current_user)
+    clients = _clients_for_user(db, current_user)
     return templates.TemplateResponse(
         request,
         "orders/form.html",

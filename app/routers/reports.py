@@ -16,14 +16,30 @@ router = APIRouter(prefix="/reports")
 templates = Jinja2Templates(directory="app/templates")
 
 
+def _reports_query(db, current_user):
+    q = db.query(Report)
+    if current_user.role != "super_admin" and current_user.client_id:
+        q = q.filter(Report.client_id == current_user.client_id)
+    return q
+
+
+def _clients_for_user(db, current_user):
+    if current_user.role == "super_admin":
+        return db.query(Client).order_by(Client.name).all()
+    if current_user.client_id:
+        c = db.query(Client).filter(Client.id == current_user.client_id).first()
+        return [c] if c else []
+    return []
+
+
 @router.get("", response_class=HTMLResponse)
 def report_list(
     request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(require_admin_up),
 ):
-    reports = db.query(Report).order_by(Report.created_at.desc()).all()
-    clients = db.query(Client).order_by(Client.name).all()
+    reports = _reports_query(db, current_user).order_by(Report.created_at.desc()).all()
+    clients = _clients_for_user(db, current_user)
     return templates.TemplateResponse(
         request,
         "reports/list.html",
@@ -39,7 +55,7 @@ def report_new(
     db: Session = Depends(get_db),
     current_user=Depends(require_admin_up),
 ):
-    clients = db.query(Client).order_by(Client.name).all()
+    clients = _clients_for_user(db, current_user)
     return templates.TemplateResponse(
         request,
         "reports/form.html",
@@ -63,8 +79,11 @@ def report_create(
     start = datetime.strptime(period_start, "%Y-%m-%d") if period_start else None
     end = datetime.strptime(period_end, "%Y-%m-%d") if period_end else None
 
-    # Auto-compute totals for the period if client provided
-    cid = int(client_id) if client_id else None
+    # Non-super_admin always uses their own company
+    if current_user.role != "super_admin" and current_user.client_id:
+        cid = current_user.client_id
+    else:
+        cid = int(client_id) if client_id else None
     q = db.query(Order).filter(Order.client_id == cid) if cid else db.query(Order)
     if start:
         q = q.filter(Order.order_date >= start)
@@ -99,7 +118,9 @@ def report_detail(
     report = db.query(Report).filter(Report.id == report_id).first()
     if not report:
         return RedirectResponse("/reports", status_code=302)
-    clients = db.query(Client).order_by(Client.name).all()
+    if current_user.role != "super_admin" and current_user.client_id and report.client_id != current_user.client_id:
+        return RedirectResponse("/reports", status_code=302)
+    clients = _clients_for_user(db, current_user)
     return templates.TemplateResponse(
         request,
         "reports/form.html",

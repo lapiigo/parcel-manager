@@ -22,6 +22,21 @@ router = APIRouter(prefix="/parcels")
 templates = Jinja2Templates(directory="app/templates")
 
 
+def _company_query(db, current_user):
+    """Base Parcel query scoped to the user's company (or all for super_admin)."""
+    q = db.query(Parcel)
+    if current_user.role != "super_admin" and current_user.client_id:
+        q = q.filter(Parcel.client_id == current_user.client_id)
+    return q
+
+
+def _check_parcel_access(parcel, current_user):
+    """Return False if a non-super_admin user cannot access this parcel."""
+    if current_user.role == "super_admin" or not current_user.client_id:
+        return True
+    return parcel.client_id == current_user.client_id
+
+
 @router.get("", response_class=HTMLResponse)
 def parcel_list(
     request: Request,
@@ -33,7 +48,7 @@ def parcel_list(
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
-    query = db.query(Parcel)
+    query = _company_query(db, current_user)
     if status:
         query = query.filter(Parcel.status == status)
     if unpaid:
@@ -56,11 +71,12 @@ def parcel_list(
     ).all()
 
     counts = {}
+    base = _company_query(db, current_user)
     for s in ["unidentified", "in_transit", "delivered", "in_warehouse", "in_forwarding", "disposed", "sold"]:
-        counts[s] = db.query(Parcel).filter(Parcel.status == s).count()
+        counts[s] = base.filter(Parcel.status == s).count()
     # Unpaid count: in_warehouse with no payment_report_date
     counts["unpaid"] = (
-        db.query(Parcel)
+        _company_query(db, current_user)
         .filter(Parcel.status == "in_warehouse", Parcel.payment_report_date.is_(None))
         .count()
     )
@@ -162,7 +178,7 @@ def report_new(
     if not can(current_user, "edit_parcel"):
         return RedirectResponse("/parcels?status=in_warehouse", status_code=302)
     parcels = (
-        db.query(Parcel)
+        _company_query(db, current_user)
         .filter(Parcel.status == "in_warehouse", Parcel.payment_report_date.is_(None))
         .order_by(Parcel.external_order_id.asc(), Parcel.created_at.asc())
         .all()
@@ -214,6 +230,7 @@ def parcel_new(
     if not can(current_user, "create_parcel"):
         return RedirectResponse("/parcels", status_code=302)
     suppliers = db.query(Supplier).order_by(Supplier.name).all()
+    clients = db.query(Client).order_by(Client.name).all() if current_user.role == "super_admin" else []
     return templates.TemplateResponse(
         request,
         "parcels/form.html",
@@ -221,6 +238,7 @@ def parcel_new(
             "current_user": current_user,
             "parcel": None,
             "suppliers": suppliers,
+            "clients": clients,
             "can": can,
             "error": ""
         },
@@ -233,6 +251,7 @@ async def parcel_create(
     external_order_id: str = Form(""),
     tracking_number: str = Form(...),
     supplier_id: str = Form(""),
+    client_id: str = Form(""),
     qty: str = Form("1"),
     asin: str = Form(""),
     purchase_price: str = Form(""),
@@ -244,6 +263,7 @@ async def parcel_create(
     existing = db.query(Parcel).filter(Parcel.tracking_number == tracking_number).first()
     if existing:
         suppliers = db.query(Supplier).order_by(Supplier.name).all()
+        clients = db.query(Client).order_by(Client.name).all() if current_user.role == "super_admin" else []
         return templates.TemplateResponse(
             request,
             "parcels/form.html",
@@ -251,6 +271,7 @@ async def parcel_create(
                 "current_user": current_user,
                 "parcel": None,
                 "suppliers": suppliers,
+                "clients": clients,
                 "can": can,
                 "error": f"Tracking number '{tracking_number}' already exists"
             },
@@ -263,10 +284,17 @@ async def parcel_create(
         except ValueError:
             pass
 
+    # Determine company: super_admin picks from form, others inherit their own
+    if current_user.role == "super_admin":
+        resolved_client_id = int(client_id) if client_id else None
+    else:
+        resolved_client_id = current_user.client_id
+
     parcel = Parcel(
         external_order_id=external_order_id.strip() or None,
         tracking_number=tracking_number.strip(),
         supplier_id=int(supplier_id) if supplier_id else None,
+        client_id=resolved_client_id,
         qty=int(qty) if qty else 1,
         asin=asin.strip().upper() or None,
         purchase_price=float(purchase_price) if purchase_price else None,
@@ -289,7 +317,7 @@ def parcel_detail(
     current_user=Depends(require_manager_up),
 ):
     parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
-    if not parcel:
+    if not parcel or not _check_parcel_access(parcel, current_user):
         return RedirectResponse("/parcels", status_code=302)
     suppliers = db.query(Supplier).order_by(Supplier.name).all()
     clients = db.query(Client).order_by(Client.name).all()
@@ -341,9 +369,10 @@ def parcel_edit_page(
     if not can(current_user, "edit_parcel"):
         return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
     parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
-    if not parcel:
+    if not parcel or not _check_parcel_access(parcel, current_user):
         return RedirectResponse("/parcels", status_code=302)
     suppliers = db.query(Supplier).order_by(Supplier.name).all()
+    clients = db.query(Client).order_by(Client.name).all() if current_user.role == "super_admin" else []
     return templates.TemplateResponse(
         request,
         "parcels/form.html",
@@ -351,6 +380,7 @@ def parcel_edit_page(
             "current_user": current_user,
             "parcel": parcel,
             "suppliers": suppliers,
+            "clients": clients,
             "can": can,
             "error": "",
         },
@@ -364,6 +394,7 @@ async def parcel_edit(
     external_order_id: str = Form(""),
     tracking_number: str = Form(...),
     supplier_id: str = Form(""),
+    client_id: str = Form(""),
     qty: str = Form("1"),
     asin: str = Form(""),
     purchase_price: str = Form(""),
@@ -373,8 +404,10 @@ async def parcel_edit(
     current_user=Depends(require_manager_up),
 ):
     parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
-    if not parcel:
+    if not parcel or not _check_parcel_access(parcel, current_user):
         return RedirectResponse("/parcels", status_code=302)
+    if current_user.role == "super_admin":
+        parcel.client_id = int(client_id) if client_id else None
     parcel.external_order_id = external_order_id.strip() or None
     parcel.tracking_number = tracking_number.strip()
     parcel.supplier_id = int(supplier_id) if supplier_id else None
@@ -404,7 +437,7 @@ def parcel_status_change(
     current_user=Depends(require_manager_up),
 ):
     parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
-    if parcel:
+    if parcel and _check_parcel_access(parcel, current_user):
         transition_parcel(
             parcel, new_status, db,
             changed_by=current_user.full_name or current_user.username,
