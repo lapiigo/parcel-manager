@@ -75,13 +75,14 @@
   </div>
 
   <!-- Calendar block -->
+  <script>window._calendarEvents = {{ calendar_events | safe }};</script>
   <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5 mb-6"
        x-data="{
          today: new Date(),
          currentYear: new Date().getFullYear(),
          currentMonth: new Date().getMonth(),
          selectedDate: null,
-         allEvents: {{ calendar_events | safe }},
+         allEvents: window._calendarEvents || [],
 
          prevMonth() {
            if (this.currentMonth === 0) { this.currentMonth = 11; this.currentYear--; }
