@@ -74,21 +74,191 @@
     </div>
   </div>
 
-  <!-- Due soon banner -->
-  {% if due_soon %}
-  <div class="bg-red-50 border border-red-100 rounded-xl p-4 mb-6">
-    <p class="text-sm font-semibold text-red-700 mb-2">⚠️ Deadlines in the next 48 hours</p>
-    <div class="space-y-1">
-      {% for task in due_soon %}
-      <a href="{% if task.project_id %}/todo/projects/{{ task.project_id }}{% else %}/todo?tab=inbox{% endif %}"
-         class="flex items-center justify-between hover:bg-red-100 rounded-lg px-2 py-1 transition-colors">
-        <span class="text-sm text-red-800">{{ task.title }}</span>
-        <span class="text-xs text-red-500">{{ task.deadline.strftime('%d.%m %H:%M') if task.deadline }}</span>
-      </a>
-      {% endfor %}
+  <!-- Calendar block -->
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5 mb-6"
+       x-data="{
+         today: new Date(),
+         currentYear: new Date().getFullYear(),
+         currentMonth: new Date().getMonth(),
+         selectedDate: null,
+         allEvents: {{ calendar_events | safe }},
+
+         prevMonth() {
+           if (this.currentMonth === 0) { this.currentMonth = 11; this.currentYear--; }
+           else { this.currentMonth--; }
+         },
+         nextMonth() {
+           if (this.currentMonth === 11) { this.currentMonth = 0; this.currentYear++; }
+           else { this.currentMonth++; }
+         },
+         get calendarDays() {
+           const year = this.currentYear, month = this.currentMonth;
+           const raw = new Date(year, month, 1).getDay();
+           const offset = raw === 0 ? 6 : raw - 1;
+           const total = new Date(year, month + 1, 0).getDate();
+           const days = [];
+           for (let i = 0; i < offset; i++) days.push(null);
+           for (let d = 1; d <= total; d++) days.push(d);
+           while (days.length % 7 !== 0) days.push(null);
+           return days;
+         },
+         get monthLabel() {
+           const M = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+           return M[this.currentMonth] + ' ' + this.currentYear;
+         },
+         dateStr(day) {
+           if (!day) return '';
+           return this.currentYear + '-' + String(this.currentMonth + 1).padStart(2,'0') + '-' + String(day).padStart(2,'0');
+         },
+         isToday(day) {
+           if (!day) return false;
+           const t = this.today;
+           return day === t.getDate() && this.currentMonth === t.getMonth() && this.currentYear === t.getFullYear();
+         },
+         isSelected(day) { return day && this.selectedDate === this.dateStr(day); },
+         eventsOnDay(day) {
+           const d = this.dateStr(day);
+           return d ? this.allEvents.filter(e => e.date === d) : [];
+         },
+         hasEvents(day) { return this.eventsOnDay(day).length > 0; },
+         selectDay(day) {
+           if (!day) return;
+           const d = this.dateStr(day);
+           this.selectedDate = (this.selectedDate === d) ? null : d;
+         },
+         get panelEvents() {
+           if (this.selectedDate) {
+             return this.allEvents
+               .filter(e => e.date === this.selectedDate)
+               .sort((a,b) => (a.time||'').localeCompare(b.time||''));
+           }
+           const t = this.today;
+           const pad = n => String(n).padStart(2,'0');
+           const todayStr = t.getFullYear() + '-' + pad(t.getMonth()+1) + '-' + pad(t.getDate());
+           const lim = new Date(t); lim.setDate(lim.getDate() + 14);
+           const limStr = lim.getFullYear() + '-' + pad(lim.getMonth()+1) + '-' + pad(lim.getDate());
+           return this.allEvents
+             .filter(e => e.date >= todayStr && e.date <= limStr)
+             .sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
+         },
+         get panelTitle() {
+           if (!this.selectedDate) return 'Next 14 days';
+           const [y,m,d] = this.selectedDate.split('-');
+           const M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+           return M[parseInt(m)-1] + ' ' + parseInt(d) + ', ' + y;
+         },
+         formatDate(ev) {
+           if (this.selectedDate) return ev.time;
+           return ev.date.slice(5).replace('-','.') + ' ' + ev.time;
+         }
+       }">
+
+    <div class="flex flex-col sm:flex-row gap-6">
+
+      <!-- Left: mini calendar -->
+      <div class="shrink-0 w-full sm:w-auto">
+        <div class="flex items-center justify-between mb-3">
+          <button @click="prevMonth()"
+                  class="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+          </button>
+          <span class="text-sm font-semibold text-gray-700" x-text="monthLabel"></span>
+          <button @click="nextMonth()"
+                  class="p-1.5 rounded-lg hover:bg-gray-100 text-gray-500 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+          </button>
+        </div>
+
+        <!-- Weekday headers Mon–Sun -->
+        <div class="grid grid-cols-7 mb-1">
+          <template x-for="h in ['Mo','Tu','We','Th','Fr','Sa','Su']" :key="h">
+            <div class="text-center text-xs font-medium text-gray-400 py-1 w-9" x-text="h"></div>
+          </template>
+        </div>
+
+        <!-- Day cells -->
+        <div class="grid grid-cols-7 gap-y-0.5">
+          <template x-for="(day, idx) in calendarDays" :key="idx">
+            <button
+              @click="selectDay(day)"
+              :disabled="!day"
+              class="relative w-9 h-9 mx-auto rounded-lg text-xs flex items-center justify-center transition-colors"
+              :class="{
+                'invisible pointer-events-none': !day,
+                'bg-indigo-600 text-white font-bold shadow-sm': isSelected(day),
+                'bg-indigo-50 text-indigo-700 font-semibold ring-1 ring-inset ring-indigo-300': isToday(day) && !isSelected(day),
+                'text-gray-700 hover:bg-gray-100': day && !isSelected(day) && !isToday(day),
+              }">
+              <span x-text="day"></span>
+              <span x-show="hasEvents(day) && !isSelected(day)"
+                    class="absolute bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-indigo-400"></span>
+            </button>
+          </template>
+        </div>
+
+        <!-- Hints -->
+        <div class="flex items-center gap-3 mt-3">
+          <span class="flex items-center gap-1.5 text-xs text-gray-400">
+            <span class="w-2 h-2 rounded-full bg-indigo-400 inline-block"></span> has events
+          </span>
+          <button x-show="selectedDate" @click="selectedDate = null"
+                  class="ml-auto text-xs text-indigo-600 hover:underline">
+            Show all →
+          </button>
+        </div>
+      </div>
+
+      <!-- Divider -->
+      <div class="hidden sm:block w-px bg-gray-100 self-stretch shrink-0"></div>
+
+      <!-- Right: event list -->
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold text-gray-700" x-text="panelTitle"></h3>
+          <span class="text-xs text-gray-400"
+                x-text="panelEvents.length + ' event' + (panelEvents.length !== 1 ? 's' : '')"></span>
+        </div>
+
+        <div class="space-y-2 max-h-64 overflow-y-auto pr-1">
+          <template x-if="panelEvents.length === 0">
+            <div class="text-center py-8">
+              <p class="text-2xl mb-1">📭</p>
+              <p class="text-sm text-gray-400">No events</p>
+            </div>
+          </template>
+          <template x-for="(ev, i) in panelEvents" :key="i">
+            <div class="border rounded-lg px-3 py-2.5 flex items-start gap-2.5 transition-colors"
+                 :class="{
+                   'bg-blue-50 border-blue-100':   ev.type === 'meeting',
+                   'bg-red-50 border-red-100':     ev.type === 'task' && ev.priority === 'urgent',
+                   'bg-orange-50 border-orange-100': ev.type === 'task' && ev.priority === 'high',
+                   'bg-gray-50 border-gray-100':   ev.type === 'task' && (ev.priority === 'medium' || ev.priority === 'low'),
+                 }">
+              <span class="text-base shrink-0 leading-none mt-0.5" x-text="ev.type === 'meeting' ? '📅' : '📋'"></span>
+              <div class="min-w-0 flex-1">
+                <p class="text-sm font-medium text-gray-800 truncate" x-text="ev.title"></p>
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+                  <span class="text-xs text-gray-500 font-mono" x-text="formatDate(ev)"></span>
+                  <span x-show="ev.project" class="text-xs text-gray-400 truncate max-w-[120px]"
+                        x-text="'📁 ' + ev.project"></span>
+                  <span x-show="ev.type === 'task'"
+                        class="text-xs font-medium capitalize"
+                        :class="{
+                          'text-red-600':    ev.priority === 'urgent',
+                          'text-orange-600': ev.priority === 'high',
+                          'text-blue-600':   ev.priority === 'medium',
+                          'text-green-600':  ev.priority === 'low',
+                        }"
+                        x-text="ev.priority"></span>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
     </div>
   </div>
-  {% endif %}
 
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 

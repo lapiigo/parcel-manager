@@ -1,4 +1,5 @@
 import os
+import json
 import uuid
 from datetime import datetime
 from typing import Optional, List
@@ -144,6 +145,45 @@ def todo_index(
         .order_by(TodoTask.created_at.desc())
         .all()
     )
+    # Calendar events: all meetings + all tasks with deadlines (active)
+    cal_meetings = (
+        db.query(TodoMeeting)
+        .filter(TodoMeeting.user_id == current_user.id)
+        .all()
+    )
+    cal_tasks = (
+        db.query(TodoTask)
+        .filter(
+            TodoTask.user_id == current_user.id,
+            TodoTask.deadline != None,
+            TodoTask.is_idea == False,
+            TodoTask.status.notin_(["done", "cancelled"]),
+        )
+        .all()
+    )
+    calendar_events = json.dumps(
+        [
+            {
+                "date": m.scheduled_at.strftime("%Y-%m-%d"),
+                "title": m.title,
+                "type": "meeting",
+                "time": m.scheduled_at.strftime("%H:%M"),
+                "project": m.project.name if m.project else None,
+            }
+            for m in cal_meetings
+        ] + [
+            {
+                "date": t.deadline.strftime("%Y-%m-%d"),
+                "title": t.title,
+                "type": "task",
+                "priority": t.priority,
+                "time": t.deadline.strftime("%H:%M"),
+                "project": t.project.name if t.project else None,
+            }
+            for t in cal_tasks
+        ]
+    )
+
     from app.services.telegram_service import get_bot_username
     bot_username = get_bot_username()
 
@@ -160,6 +200,7 @@ def todo_index(
             "inbox_tasks": inbox_tasks,
             "inbox_ideas": inbox_ideas,
             "active_tab": tab,
+            "calendar_events": calendar_events,
             "project_colors": PROJECT_COLORS,
             "note_colors": NOTE_COLORS,
             "note_dot_colors": NOTE_DOT_COLORS,
