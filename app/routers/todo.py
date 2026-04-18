@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.auth import require_super_admin, require_admin_up
+from app.auth import require_super_admin, require_admin_up, require_manager_up
 from app.models.todo import TodoProject, TodoTask, TaskAttachment, TodoMeeting, Reminder, Note
 from app.permissions import can
 from app.services.telegram_service import REMINDER_OPTIONS
@@ -105,8 +105,14 @@ def todo_index(
 ):
     projects = (
         db.query(TodoProject)
-        .filter(TodoProject.user_id == current_user.id)
+        .filter(TodoProject.user_id == current_user.id, TodoProject.is_archived == False)
         .order_by(TodoProject.created_at.desc())
+        .all()
+    )
+    archived_projects = (
+        db.query(TodoProject)
+        .filter(TodoProject.user_id == current_user.id, TodoProject.is_archived == True)
+        .order_by(TodoProject.updated_at.desc())
         .all()
     )
     # Upcoming meetings (next 7 days)
@@ -222,6 +228,7 @@ def todo_index(
         {
             "current_user": current_user,
             "projects": projects,
+            "archived_projects": archived_projects,
             "upcoming": upcoming,
             "due_soon": due_soon,
             "total_tasks": total_tasks,
@@ -285,6 +292,36 @@ def edit_project(
         project.color = color
         db.commit()
     return RedirectResponse(f"/todo/projects/{project_id}", status_code=302)
+
+
+@router.post("/projects/{project_id}/archive")
+def archive_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin_up),
+):
+    project = db.query(TodoProject).filter(
+        TodoProject.id == project_id, TodoProject.user_id == current_user.id
+    ).first()
+    if project:
+        project.is_archived = True
+        db.commit()
+    return RedirectResponse("/todo", status_code=302)
+
+
+@router.post("/projects/{project_id}/unarchive")
+def unarchive_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin_up),
+):
+    project = db.query(TodoProject).filter(
+        TodoProject.id == project_id, TodoProject.user_id == current_user.id
+    ).first()
+    if project:
+        project.is_archived = False
+        db.commit()
+    return RedirectResponse("/todo", status_code=302)
 
 
 @router.post("/projects/{project_id}/delete")
@@ -686,7 +723,7 @@ def edit_note(
 def set_timezone(
     timezone: str = Form(...),
     db: Session = Depends(get_db),
-    current_user=Depends(require_admin_up),
+    current_user=Depends(require_manager_up),
 ):
     try:
         ZoneInfo(timezone)  # validate IANA timezone name

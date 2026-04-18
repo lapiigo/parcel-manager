@@ -196,13 +196,13 @@
   try {
     var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (!tz) return;
-    var key = 'tz_v1_{{ current_user.id }}';
-    if (localStorage.getItem(key) === tz) return;
+    var dbTz = '{{ current_user.timezone or "" }}';
+    if (dbTz === tz) return;
     fetch('/todo/timezone', {
       method: 'POST',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
       body: 'timezone=' + encodeURIComponent(tz)
-    }).then(function(r) { if (r.ok) localStorage.setItem(key, tz); });
+    });
   } catch(e) {}
 })();
 </script>
