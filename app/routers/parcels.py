@@ -171,6 +171,43 @@ def sync_transit(
     )
 
 
+@router.post("/bulk")
+def parcel_bulk(
+    request: Request,
+    action: str = Form(...),
+    ids: list[int] = Form(default=[]),
+    new_status: str = Form(""),
+    back_status: str = Form("in_transit"),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    if not ids:
+        return RedirectResponse(f"/parcels?status={back_status}", status_code=302)
+
+    parcels = (
+        _company_query(db, current_user)
+        .filter(Parcel.id.in_(ids))
+        .all()
+    )
+
+    if action == "delete" and can(current_user, "delete_parcel"):
+        for p in parcels:
+            db.delete(p)
+        db.commit()
+
+    elif action == "set_status" and new_status and can(current_user, "edit_parcel"):
+        for p in parcels:
+            p.status = new_status
+        db.commit()
+        back_status = new_status
+
+    import urllib.parse
+    return RedirectResponse(
+        f"/parcels?status={urllib.parse.quote(back_status)}",
+        status_code=302,
+    )
+
+
 @router.get("/report/new", response_class=HTMLResponse)
 def report_new(
     request: Request,
