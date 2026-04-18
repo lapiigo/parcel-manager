@@ -330,5 +330,9 @@ def sync(supplier_id: int, username: str, password: str, db,
                 else:
                     skipped += 1
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        errors.append(f"DB commit error: {e}")
     return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}

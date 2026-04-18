@@ -243,6 +243,7 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
 
     created = updated = skipped = 0
     errors: list[str] = []
+    seen_tracking: set[str] = set()  # dedup within this sync run
 
     for order in orders:
         ext_id = str(order.get("id") or "").strip()
@@ -256,6 +257,11 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
             skipped += 1
             errors.append(f"Order {ext_id}: no label_ext track — skipped")
             continue
+
+        if tracking in seen_tracking:
+            skipped += 1
+            continue
+        seen_tracking.add(tracking)
 
         products: list[dict] = order.get("products") or []
 
@@ -358,7 +364,11 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
             else:
                 skipped += 1
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        errors.append(f"DB commit error: {e}")
     return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
 
 
