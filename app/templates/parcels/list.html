@@ -141,10 +141,33 @@
           <td class="px-4 py-3 text-gray-500 text-xs">{{ p.supplier.name if p.supplier else "—" }}</td>
           {% if current_user.role == 'super_admin' or not current_user.client_id %}
           <td class="px-4 py-3 text-xs">
-            {% if p.client %}
-            <span class="font-medium text-gray-700">{{ p.client.name }}</span>
+            {% if can(current_user, 'edit_parcel') %}
+            <div class="relative" x-data="{ open: false }">
+              <button @click="open = !open"
+                      class="{% if p.client %}text-gray-700 hover:text-indigo-600{% else %}text-amber-500 hover:text-amber-700{% endif %} font-medium transition-colors text-left">
+                {{ p.client.name if p.client else "Unassigned" }}
+              </button>
+              <div x-show="open" @click.outside="open = false"
+                   class="absolute z-30 top-full mt-1 left-0 bg-white rounded-xl shadow-xl border border-gray-100 py-1 min-w-max">
+                <form method="post" action="/parcels/{{ p.id }}/assign-client">
+                  <input type="hidden" name="back_status" value="{{ active_status }}" />
+                  <button type="submit" name="client_id" value=""
+                          class="w-full text-left px-4 py-2 text-sm text-gray-400 hover:bg-gray-50 transition-colors italic">
+                    — Unassigned —
+                  </button>
+                  {% for c in clients %}
+                  <button type="submit" name="client_id" value="{{ c.id }}"
+                          class="w-full text-left px-4 py-2 text-sm {% if p.client_id == c.id %}text-indigo-600 font-semibold{% else %}text-gray-700{% endif %} hover:bg-gray-50 transition-colors">
+                    {{ c.name }}
+                  </button>
+                  {% endfor %}
+                </form>
+              </div>
+            </div>
             {% else %}
-            <span class="text-amber-500 font-medium">Unassigned</span>
+            <span class="{% if p.client %}text-gray-700 font-medium{% else %}text-amber-500 font-medium{% endif %}">
+              {{ p.client.name if p.client else "Unassigned" }}
+            </span>
             {% endif %}
           </td>
           {% endif %}
@@ -227,7 +250,32 @@
   </div>
   {% endif %}
 
+  {% if can(current_user, 'edit_parcel') and clients %}
+  <div class="w-px h-5 bg-gray-600"></div>
+  <!-- Assign client -->
+  <div class="relative" x-data="{ open: false }">
+    <button @click="open = !open" class="flex items-center gap-1.5 text-sm text-gray-200 hover:text-white transition-colors">
+      Assign client
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+    </button>
+    <div x-show="open" @click.outside="open = false"
+         class="absolute bottom-full mb-2 left-0 bg-white rounded-xl shadow-xl border border-gray-100 py-1 min-w-max">
+      <button @click="bulkAction('set_client', '', ''); open = false"
+              class="w-full text-left px-4 py-2 text-sm text-gray-400 hover:bg-gray-50 transition-colors italic">
+        — Unassigned —
+      </button>
+      {% for c in clients %}
+      <button @click="bulkAction('set_client', '', '{{ c.id }}'); open = false"
+              class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">
+        {{ c.name }}
+      </button>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
   {% if can(current_user, 'delete_parcel') %}
+  <div class="w-px h-5 bg-gray-600"></div>
   <button @click="bulkAction('delete')"
           class="flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 transition-colors">
     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
@@ -243,6 +291,7 @@
   <form id="bulk-form" method="post" action="/parcels/bulk" class="hidden">
     <input type="hidden" name="action" id="bulk-action" />
     <input type="hidden" name="new_status" id="bulk-new-status" />
+    <input type="hidden" name="new_client_id" id="bulk-new-client-id" />
     <input type="hidden" name="back_status" value="{{ active_status }}" />
     <div id="bulk-ids"></div>
   </form>
@@ -266,12 +315,13 @@ function bulkSelect() {
         this.selected = [];
       }
     },
-    bulkAction(action, newStatus) {
+    bulkAction(action, newStatus, newClientId) {
       if (action === 'delete') {
         if (!confirm(`Delete ${this.selected.length} parcel(s)?`)) return;
       }
       document.getElementById('bulk-action').value = action;
       document.getElementById('bulk-new-status').value = newStatus || '';
+      document.getElementById('bulk-new-client-id').value = newClientId || '';
       const container = document.getElementById('bulk-ids');
       container.innerHTML = '';
       this.selected.forEach(id => {

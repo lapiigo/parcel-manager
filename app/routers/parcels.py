@@ -83,6 +83,8 @@ def parcel_list(
         .count()
     )
 
+    clients = db.query(Client).order_by(Client.name).all() if current_user.role == "super_admin" or not current_user.client_id else []
+
     return templates.TemplateResponse(
         request,
         "parcels/list.html",
@@ -95,7 +97,8 @@ def parcel_list(
             "sync_flash": sync_flash,
             "STATUS_LABELS": STATUS_LABELS,
             "STATUS_COLORS": STATUS_COLORS,
-            "can": can
+            "clients": clients,
+            "can": can,
         },
     )
 
@@ -177,18 +180,16 @@ def parcel_bulk(
     action: str = Form(...),
     ids: list[int] = Form(default=[]),
     new_status: str = Form(""),
+    new_client_id: str = Form(""),
     back_status: str = Form("in_transit"),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
+    import urllib.parse
     if not ids:
         return RedirectResponse(f"/parcels?status={back_status}", status_code=302)
 
-    parcels = (
-        _company_query(db, current_user)
-        .filter(Parcel.id.in_(ids))
-        .all()
-    )
+    parcels = _company_query(db, current_user).filter(Parcel.id.in_(ids)).all()
 
     if action == "delete" and can(current_user, "delete_parcel"):
         for p in parcels:
@@ -201,6 +202,36 @@ def parcel_bulk(
         db.commit()
         back_status = new_status
 
+    elif action == "set_client" and can(current_user, "edit_parcel"):
+        cid = int(new_client_id) if new_client_id else None
+        for p in parcels:
+            p.client_id = cid
+            if cid and p.status == "unidentified":
+                p.status = "in_transit"
+        db.commit()
+
+    return RedirectResponse(
+        f"/parcels?status={urllib.parse.quote(back_status)}",
+        status_code=302,
+    )
+
+
+@router.post("/{parcel_id}/assign-client")
+def parcel_assign_client(
+    request: Request,
+    parcel_id: int,
+    client_id: str = Form(""),
+    back_status: str = Form("in_transit"),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    if can(current_user, "edit_parcel"):
+        parcel = _company_query(db, current_user).filter(Parcel.id == parcel_id).first()
+        if parcel:
+            parcel.client_id = int(client_id) if client_id else None
+            if parcel.status == "unidentified" and client_id:
+                parcel.status = "in_transit"
+            db.commit()
     import urllib.parse
     return RedirectResponse(
         f"/parcels?status={urllib.parse.quote(back_status)}",
