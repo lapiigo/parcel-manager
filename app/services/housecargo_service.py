@@ -146,8 +146,12 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
     token = _login(username, password)
     deliveries = _fetch_deliveries(token)
 
-    # Build a lookup of all in_transit parcels for this supplier by tracking number
-    q = db.query(Parcel).filter(Parcel.supplier_id == supplier_id, Parcel.status == "in_transit")
+    # Build a lookup of all in_transit unpaid parcels for this supplier by tracking number
+    q = db.query(Parcel).filter(
+        Parcel.supplier_id == supplier_id,
+        Parcel.status == "in_transit",
+        Parcel.payment_report_date.is_(None),
+    )
     if client_id is not None:
         q = q.filter(Parcel.client_id == client_id)
     transit_parcels = q.all()
@@ -266,6 +270,11 @@ def sync(supplier_id: int, username: str, password: str, db,
                 )
                 if len(siblings) == 1 and n == 1:
                     parcel = siblings[0]
+
+            # Skip paid parcels — already processed manually or by report
+            if parcel is not None and parcel.payment_report_date is not None:
+                skipped += 1
+                continue
 
             # Map housecargo delivery status to our status
             is_delivered = "deliver" in track_status.lower()

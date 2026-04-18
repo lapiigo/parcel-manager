@@ -275,6 +275,11 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
             if len(siblings) == 1:
                 parcel = siblings[0]
 
+        # Skip paid parcels — already processed manually or by report
+        if parcel is not None and parcel.payment_report_date is not None:
+            skipped += 1
+            continue
+
         # Match client by address name and/or wishlist
         matched_client_id, matched_asin, match_source, is_wrong_address = \
             _match_client_for_order(order, supplier_id, db)
@@ -353,7 +358,11 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db) -> 
 
     transit_parcels = (
         db.query(Parcel)
-        .filter(Parcel.supplier_id == supplier_id, Parcel.status == "in_transit")
+        .filter(
+            Parcel.supplier_id == supplier_id,
+            Parcel.status == "in_transit",
+            Parcel.payment_report_date.is_(None),
+        )
         .all()
     )
     by_tracking: dict[str, Parcel] = {p.tracking_number: p for p in transit_parcels}
