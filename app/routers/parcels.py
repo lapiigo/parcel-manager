@@ -45,6 +45,7 @@ def parcel_list(
     unpaid: str = Query(""),
     report: str = Query(""),
     sync_flash: str = Query(""),
+    client_filter: str = Query(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
@@ -57,6 +58,10 @@ def parcel_list(
         query = query.filter(Parcel.payment_report_date.is_(None))
     if report:
         query = query.filter(Parcel.payment_report_date == report)
+    if client_filter == "unassigned":
+        query = query.filter(Parcel.client_id.is_(None))
+    elif client_filter:
+        query = query.filter(Parcel.client_id == int(client_filter))
     if q:
         q_stripped = q.strip()
         q_upper = q_stripped.upper()
@@ -94,6 +99,7 @@ def parcel_list(
             "active_status": status,
             "counts": counts,
             "q": q,
+            "client_filter": client_filter,
             "sync_flash": sync_flash,
             "STATUS_LABELS": STATUS_LABELS,
             "STATUS_COLORS": STATUS_COLORS,

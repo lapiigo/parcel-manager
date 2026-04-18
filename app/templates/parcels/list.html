@@ -73,14 +73,24 @@
   </div>
   {% endif %}
 
-  <!-- Search -->
+  <!-- Search + Client filter -->
   <div class="px-4 py-3 border-b border-gray-50">
     <form method="get" action="/parcels" class="flex gap-2">
       <input type="hidden" name="status" value="{{ active_status }}" />
       <input type="text" name="q" value="{{ q }}" placeholder="Search by Order ID, tracking number, or ASIN..."
              class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+      {% if clients %}
+      <select name="client_filter" onchange="this.form.submit()"
+              class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-gray-600">
+        <option value="">All clients</option>
+        <option value="unassigned" {% if client_filter == 'unassigned' %}selected{% endif %}>— Unassigned —</option>
+        {% for c in clients %}
+        <option value="{{ c.id }}" {% if client_filter == c.id|string %}selected{% endif %}>{{ c.name }}</option>
+        {% endfor %}
+      </select>
+      {% endif %}
       <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm px-4 py-2 rounded-lg transition-colors">Search</button>
-      {% if q %}<a href="/parcels?status={{ active_status }}" class="text-sm text-gray-400 hover:text-gray-600 px-3 py-2">✕</a>{% endif %}
+      {% if q or client_filter %}<a href="/parcels?status={{ active_status }}" class="text-sm text-gray-400 hover:text-gray-600 px-3 py-2">✕</a>{% endif %}
     </form>
   </div>
 
