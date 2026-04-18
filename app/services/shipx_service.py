@@ -163,39 +163,29 @@ def _match_client_for_order(
     order: dict, supplier_id: int, db
 ) -> tuple[Optional[int], Optional[str], Optional[str], bool]:
     """
-    Try to identify the client and ASIN for an order.
+    Identify client and ASIN for a ShipX order.
+
+    Flow:
+      1. Extract ASIN from product description.
+      2. If no ASIN → fuzzy title match against wishlist (≥85%) → get ASIN.
+      3. If still no ASIN → return (None, None, None, False) → unidentified.
+      4. ASIN found → look up which client's wishlist it belongs to.
+      5. If ASIN not in any wishlist → (None, asin, None, False) → unidentified.
+      6. Compare wishlist client vs address client (wrong-address detection).
+         Mismatch → is_wrong_address=True (caller sets status=in_forwarding).
 
     Returns (client_id, asin, match_source, is_wrong_address)
-      match_source: 'address' | 'wishlist' | None
-      is_wrong_address: True when address client ≠ wishlist client
     """
     from app.models.wishlist import ClientShipXAddress, WishlistItem
 
-    address_name = ((order.get("address") or {}).get("name") or "").strip()
-    address_client_id: Optional[int] = None
-
-    if address_name:
-        addr_row = (
-            db.query(ClientShipXAddress)
-            .filter(
-                ClientShipXAddress.supplier_id == supplier_id,
-                ClientShipXAddress.address_name == address_name,
-            )
-            .first()
-        )
-        if addr_row:
-            address_client_id = addr_row.client_id
-
-    # ASIN + description from first product
+    # Step 1: extract ASIN from description
     products = order.get("products") or []
     description = (products[0].get("description") or "") if products else ""
-    asin_from_desc = _extract_asin(description)
+    asin: Optional[str] = _extract_asin(description)
 
-    # Fuzzy title matching against wishlist
+    # Step 2: if no ASIN, fuzzy match description against wishlist titles
     wishlist_client_id: Optional[int] = None
-    wishlist_asin: Optional[str] = None
-
-    if description:
+    if not asin and description:
         desc_lower = description.lower()
         all_items = db.query(WishlistItem).filter(WishlistItem.title.isnot(None)).all()
         best_ratio = 0.0
@@ -210,23 +200,41 @@ def _match_client_for_order(
                 best_ratio = ratio
                 best_item = item
 
-        if best_item and best_ratio >= 0.80:
+        if best_item and best_ratio >= 0.85:
+            asin = best_item.asin
             wishlist_client_id = best_item.client_id
-            wishlist_asin = best_item.asin
 
-    # Determine final result
-    asin = wishlist_asin or asin_from_desc
+    # Step 3: no ASIN at all → unidentified
+    if not asin:
+        return None, None, None, False
 
-    if address_client_id and wishlist_client_id:
-        is_wrong = address_client_id != wishlist_client_id
-        # Product identified by wishlist → that's the true owner
-        return wishlist_client_id, asin, "wishlist", is_wrong
-    elif address_client_id:
-        return address_client_id, asin, "address", False
-    elif wishlist_client_id:
-        return wishlist_client_id, asin, "wishlist", False
-    else:
-        return None, asin_from_desc, None, False
+    # Step 4: ASIN found but wishlist client not yet resolved → look it up by ASIN
+    if not wishlist_client_id:
+        witem = db.query(WishlistItem).filter(WishlistItem.asin == asin).first()
+        if witem:
+            wishlist_client_id = witem.client_id
+
+    # Step 5: ASIN not in any wishlist → unidentified (but keep the ASIN)
+    if not wishlist_client_id:
+        return None, asin, None, False
+
+    # Step 6: wrong-address detection via ClientShipXAddress
+    address_name = ((order.get("address") or {}).get("name") or "").strip()
+    address_client_id: Optional[int] = None
+    if address_name:
+        addr_row = (
+            db.query(ClientShipXAddress)
+            .filter(
+                ClientShipXAddress.supplier_id == supplier_id,
+                ClientShipXAddress.address_name == address_name,
+            )
+            .first()
+        )
+        if addr_row:
+            address_client_id = addr_row.client_id
+
+    is_wrong = bool(address_client_id and address_client_id != wishlist_client_id)
+    return wishlist_client_id, asin, "wishlist", is_wrong
 
 
 def sync(supplier_id: int, username: str, password: str, db) -> dict:
@@ -308,7 +316,12 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
 
         # Use matched ASIN over description-extracted ASIN
         final_asin = matched_asin or asin
-        final_status = "in_transit" if matched_client_id else "unidentified"
+        if matched_client_id is None:
+            final_status = "unidentified"
+        elif is_wrong_address:
+            final_status = "in_forwarding"
+        else:
+            final_status = "in_transit"
 
         if parcel is None:
             # Fetch title from Keepa (best-effort)
@@ -355,7 +368,7 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
                 parcel.match_source = match_source
                 parcel.is_wrong_address = is_wrong_address
                 if parcel.status == "unidentified":
-                    parcel.status = "in_transit"
+                    parcel.status = "in_forwarding" if is_wrong_address else "in_transit"
                 changed = True
             if changed:
                 updated += 1

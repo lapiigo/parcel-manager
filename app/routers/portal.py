@@ -71,14 +71,18 @@ def portal_parcels(
         parcels = (base.filter(Parcel.payment_report_date.isnot(None))
                    .order_by(Parcel.payment_report_date.desc(), Parcel.created_at.desc()).all())
     else:
-        query = base.filter(Parcel.payment_report_date.is_(None))
+        # in_forwarding parcels are hidden from clients until a new tracking is assigned
+        query = base.filter(
+            Parcel.payment_report_date.is_(None),
+            Parcel.status != "in_forwarding",
+        )
         if status:
             query = query.filter(Parcel.status == status)
         parcels = query.order_by(Parcel.created_at.desc()).all()
 
     counts = {}
-    active = base.filter(Parcel.payment_report_date.is_(None))
-    for s in ["in_transit", "delivered", "in_warehouse", "in_forwarding", "sold", "disposed"]:
+    active = base.filter(Parcel.payment_report_date.is_(None), Parcel.status != "in_forwarding")
+    for s in ["in_transit", "delivered", "in_warehouse", "sold", "disposed"]:
         counts[s] = active.filter(Parcel.status == s).count()
     counts["archive"] = base.filter(Parcel.payment_report_date.isnot(None)).count()
 
