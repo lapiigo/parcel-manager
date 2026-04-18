@@ -71,17 +71,27 @@ def parcel_list(
             Parcel.external_order_id.contains(q_stripped)
         )
     from sqlalchemy import case
-    parcels = query.order_by(
+    from collections import defaultdict
+    parcels_flat = query.order_by(
         case((Parcel.external_order_id.is_(None), 1), else_=0),
         Parcel.external_order_id.asc(),
         Parcel.created_at.asc(),
     ).all()
 
+    # Group by order_id
+    order_groups: list[tuple[str | None, list]] = []
+    _seen: dict = {}
+    for p in parcels_flat:
+        key = p.external_order_id or f"__solo_{p.id}"
+        if key not in _seen:
+            _seen[key] = []
+            order_groups.append((p.external_order_id, _seen[key]))
+        _seen[key].append(p)
+
     counts = {}
     base = _company_query(db, current_user)
     for s in ["unidentified", "in_transit", "delivered", "in_warehouse", "in_forwarding", "disposed", "sold"]:
         counts[s] = base.filter(Parcel.status == s).count()
-    # Unpaid count: in_warehouse with no payment_report_date
     counts["unpaid"] = (
         _company_query(db, current_user)
         .filter(Parcel.status == "in_warehouse", Parcel.payment_report_date.is_(None))
@@ -95,7 +105,8 @@ def parcel_list(
         "parcels/list.html",
         context={
             "current_user": current_user,
-            "parcels": parcels,
+            "order_groups": order_groups,
+            "parcels": parcels_flat,
             "active_status": status,
             "counts": counts,
             "q": q,
