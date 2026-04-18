@@ -23,7 +23,7 @@ from typing import Optional
 
 BASE_URL = "https://api.shipx.cash"
 LOGIN_PATH = "/auth/token"
-ORDERS_PATH = "/orders"
+ORDERS_PATH = "/orders/filter"
 
 _BROWSER_HEADERS = {
     "accept": "application/json, text/plain, */*",
@@ -67,16 +67,27 @@ def _login(username: str, password: str) -> str:
 
 
 def _fetch_orders(token: str) -> list[dict]:
-    """Fetch all orders, handling pagination."""
+    """Fetch all active (unpaid) orders via POST /orders/filter with pagination."""
     url = BASE_URL + ORDERS_PATH
-    headers = {**_BROWSER_HEADERS, "Authorization": f"Bearer {token}"}
+    headers = {
+        **_BROWSER_HEADERS,
+        "Authorization": f"Bearer {token}",
+        "content-type": "application/json;charset=UTF-8",
+        "x-requested-with": "XMLHttpRequest",
+    }
     all_orders: list[dict] = []
-    page = 1
+    offset = 0
+    limit = 100
 
     while True:
+        body = {
+            "offset": offset,
+            "limit": limit,
+            "order": {"sent_at": "desc"},
+            "attributes": {"status": ["sent", "received"]},
+        }
         try:
-            r = requests.put(url, json={"page": page, "per_page": 100},
-                             headers=headers, timeout=20)
+            r = requests.post(url, json=body, headers=headers, timeout=20)
         except requests.RequestException as exc:
             raise ShipXError(f"Orders request failed: {exc}") from exc
 
@@ -98,11 +109,10 @@ def _fetch_orders(token: str) -> list[dict]:
 
         all_orders.extend(batch)
 
-        # Stop if we got fewer than a full page (last page)
-        if len(batch) < 100:
+        if len(batch) < limit:
             break
 
-        page += 1
+        offset += limit
 
     return all_orders
 
