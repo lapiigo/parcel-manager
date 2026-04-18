@@ -75,7 +75,9 @@
 
   <!-- Search + Client filter -->
   <div class="px-4 py-3 border-b border-gray-50">
-    <form method="get" action="/parcels" class="flex gap-2">
+    <form method="get" action="/parcels" class="flex gap-2 items-center">
+      <input type="checkbox" :checked="allSelected" @change="toggleAll($event)"
+             class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400 cursor-pointer shrink-0" title="Select all" />
       <input type="hidden" name="status" value="{{ active_status }}" />
       <input type="text" name="q" value="{{ q }}" placeholder="Search by Order ID, tracking number, or ASIN..."
              class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
