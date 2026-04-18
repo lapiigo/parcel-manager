@@ -1,9 +1,12 @@
 import os
 import json
 import uuid
+import logging
 from datetime import datetime
 from typing import Optional, List
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, Request, Form, UploadFile, File, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -725,12 +728,25 @@ def set_timezone(
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
+    # Some browsers/OS send legacy IANA names that were renamed
+    _TZ_ALIASES = {
+        "Europe/Kiev":       "Europe/Kyiv",
+        "Asia/Calcutta":     "Asia/Kolkata",
+        "Asia/Katmandu":     "Asia/Kathmandu",
+        "Asia/Rangoon":      "Asia/Yangon",
+        "America/Godthab":   "America/Nuuk",
+        "Pacific/Truk":      "Pacific/Chuuk",
+    }
+    timezone = _TZ_ALIASES.get(timezone, timezone)
     try:
-        ZoneInfo(timezone)  # validate IANA timezone name
-        current_user.timezone = timezone
-        db.commit()
-    except Exception:
-        pass
+        ZoneInfo(timezone)
+        from app.models.user import User
+        user = db.query(User).filter(User.id == current_user.id).first()
+        if user:
+            user.timezone = timezone
+            db.commit()
+    except Exception as e:
+        logger.warning(f"set_timezone failed for '{timezone}': {e}")
     from fastapi.responses import JSONResponse
     return JSONResponse({"ok": True})
 
