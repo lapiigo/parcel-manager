@@ -74,9 +74,9 @@ def _fetch_orders(token: str) -> list[dict]:
     page = 1
 
     while True:
-        params = {"page": page, "per_page": 100}
         try:
-            r = requests.get(url, params=params, headers=headers, timeout=20)
+            r = requests.put(url, json={"page": page, "per_page": 100},
+                             headers=headers, timeout=20)
         except requests.RequestException as exc:
             raise ShipXError(f"Orders request failed: {exc}") from exc
 
