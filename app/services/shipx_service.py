@@ -243,7 +243,6 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
 
     created = updated = skipped = 0
     errors: list[str] = []
-    seen_tracking: set[str] = set()  # dedup within this sync run
 
     for order in orders:
         ext_id = str(order.get("id") or "").strip()
@@ -258,10 +257,6 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
             errors.append(f"Order {ext_id}: no label_ext track — skipped")
             continue
 
-        if tracking in seen_tracking:
-            skipped += 1
-            continue
-        seen_tracking.add(tracking)
 
         products: list[dict] = order.get("products") or []
 
@@ -280,16 +275,19 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
         if products:
             asin = _extract_asin(products[0].get("description") or "")
 
-        # Find existing parcel
-        parcel = db.query(Parcel).filter(Parcel.tracking_number == tracking).first()
-        if parcel is None and ext_id:
-            siblings = (
+        # Find existing parcel — order_id is the primary identifier
+        parcel = None
+        if ext_id:
+            parcel = (
                 db.query(Parcel)
                 .filter(Parcel.external_order_id == ext_id, Parcel.supplier_id == supplier_id)
-                .all()
+                .first()
             )
-            if len(siblings) == 1:
-                parcel = siblings[0]
+        if parcel is None:
+            parcel = db.query(Parcel).filter(
+                Parcel.tracking_number == tracking,
+                Parcel.supplier_id == supplier_id,
+            ).first()
 
         # Skip paid parcels — already processed manually or by report
         if parcel is not None and parcel.payment_report_date is not None:

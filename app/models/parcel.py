@@ -9,7 +9,7 @@ class Parcel(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     external_order_id = Column(String(255), nullable=True, index=True)  # Order ID from supplier
-    tracking_number = Column(String(255), unique=True, nullable=False, index=True)
+    tracking_number = Column(String(255), nullable=False, index=True)
     supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=True)
     qty = Column(Integer, nullable=True, default=1)

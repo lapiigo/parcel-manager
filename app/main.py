@@ -111,3 +111,17 @@ def startup():
                 conn.commit()
             except Exception:
                 pass  # Column already exists
+
+        # Drop UNIQUE constraint on parcels.tracking_number (order_id is the primary key now)
+        try:
+            indexes = conn.execute(text("PRAGMA index_list(parcels)")).fetchall()
+            unique_track_indexes = [
+                row[1] for row in indexes
+                if row[2] == 1  # unique=1
+                and "track" in row[1].lower()
+            ]
+            for idx in unique_track_indexes:
+                conn.execute(text(f"DROP INDEX IF EXISTS \"{idx}\""))
+                conn.commit()
+        except Exception:
+            pass
