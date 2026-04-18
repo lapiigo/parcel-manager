@@ -98,6 +98,9 @@
           <th class="px-4 py-3 text-left">ASIN</th>
           <th class="px-4 py-3 text-left">Qty</th>
           <th class="px-4 py-3 text-left">Supplier</th>
+          {% if current_user.role == 'super_admin' or not current_user.client_id %}
+          <th class="px-4 py-3 text-left">Client</th>
+          {% endif %}
           <th class="px-4 py-3 text-left">Status</th>
           {% if active_status == 'in_warehouse' %}
           <th class="px-4 py-3 text-left">Payment</th>
@@ -136,6 +139,15 @@
           <td class="px-4 py-3 font-mono text-xs text-gray-600">{{ p.asin or "—" }}</td>
           <td class="px-4 py-3 text-gray-600 text-xs">{{ p.qty or "—" }}</td>
           <td class="px-4 py-3 text-gray-500 text-xs">{{ p.supplier.name if p.supplier else "—" }}</td>
+          {% if current_user.role == 'super_admin' or not current_user.client_id %}
+          <td class="px-4 py-3 text-xs">
+            {% if p.client %}
+            <span class="font-medium text-gray-700">{{ p.client.name }}</span>
+            {% else %}
+            <span class="text-amber-500 font-medium">Unassigned</span>
+            {% endif %}
+          </td>
+          {% endif %}
           <td class="px-4 py-3 flex items-center gap-1.5 flex-wrap">
             <span class="text-xs px-2 py-1 rounded-full font-medium {{ STATUS_COLORS.get(p.status, '') }}">
               {{ STATUS_LABELS.get(p.status, p.status) }}
