@@ -64,13 +64,24 @@ def portal_parcels(
     client = _get_client(current_user, db)
     if not client:
         return RedirectResponse("/portal", status_code=302)
-    query = db.query(Parcel).filter(Parcel.client_id == client.id)
-    if status:
-        query = query.filter(Parcel.status == status)
-    parcels = query.order_by(Parcel.created_at.desc()).all()
+
+    base = db.query(Parcel).filter(Parcel.client_id == client.id)
+
+    if status == "archive":
+        parcels = (base.filter(Parcel.payment_report_date.isnot(None))
+                   .order_by(Parcel.payment_report_date.desc(), Parcel.created_at.desc()).all())
+    else:
+        query = base.filter(Parcel.payment_report_date.is_(None))
+        if status:
+            query = query.filter(Parcel.status == status)
+        parcels = query.order_by(Parcel.created_at.desc()).all()
+
     counts = {}
-    for s in ["in_transit", "in_warehouse", "sold", "disposed"]:
-        counts[s] = db.query(Parcel).filter(Parcel.client_id == client.id, Parcel.status == s).count()
+    active = base.filter(Parcel.payment_report_date.is_(None))
+    for s in ["in_transit", "delivered", "in_warehouse", "in_forwarding", "sold", "disposed"]:
+        counts[s] = active.filter(Parcel.status == s).count()
+    counts["archive"] = base.filter(Parcel.payment_report_date.isnot(None)).count()
+
     return templates.TemplateResponse(
         request,
         "portal/parcels.html",
@@ -81,7 +92,7 @@ def portal_parcels(
             "active_status": status,
             "counts": counts,
             "STATUS_LABELS": STATUS_LABELS,
-            "STATUS_COLORS": STATUS_COLORS
+            "STATUS_COLORS": STATUS_COLORS,
         },
     )
 
