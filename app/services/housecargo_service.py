@@ -222,6 +222,11 @@ def sync(supplier_id: int, username: str, password: str, db,
         items: list[dict] = d.get("items") or []
         outbound_tracks = _outbound_tracks(d.get("tracks") or [])
 
+        # Skip deliveries that have been paid out on HouseCargo side
+        if d.get("priceOtdFinal") is not None:
+            skipped += len(outbound_tracks) or 1
+            continue
+
         if not outbound_tracks:
             skipped += 1
             errors.append(f"Order {ext_id or '?'}: no typeId=2 track found — skipped")
@@ -278,11 +283,6 @@ def sync(supplier_id: int, username: str, password: str, db,
 
             # Map housecargo delivery status to our status
             is_delivered = "deliver" in track_status.lower()
-
-            if parcel is None and is_delivered:
-                # Already-delivered parcel not in our DB = old completed order, skip
-                skipped += 1
-                continue
 
             if parcel is None:
                 # Fetch title from Keepa if ASIN available (best-effort)

@@ -280,9 +280,11 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
             skipped += 1
             continue
 
-        # Already-delivered order not in our DB = old completed order, skip
-        label_status = (label_ext.get("status") or "").strip().lower()
-        if parcel is None and label_status == "delivered":
+        # Skip orders that have been paid out on ShipX side (payout.buyer.amount != "0")
+        payout_amount = str(
+            (order.get("payout") or {}).get("buyer", {}).get("amount", "0")
+        ).strip()
+        if payout_amount != "0":
             skipped += 1
             continue
 
