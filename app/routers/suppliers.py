@@ -158,24 +158,8 @@ def supplier_sync(
             },
         )
 
-    if not supplier.login_username or not supplier.login_password_encrypted:
-        return templates.TemplateResponse(
-            request,
-            "suppliers/sync_result.html",
-            context={
-                "current_user": current_user,
-                "supplier": supplier,
-                "can": can,
-                "error": "Credentials are not configured for this supplier.",
-                "result": None,
-            },
-        )
-
-    password = decrypt(supplier.login_password_encrypted)
-
     try:
         if supplier.platform == "housecargo":
-            # Prefer per-client credentials; fall back to supplier-level credentials
             from app.models.client import Client as ClientModel
             hc_clients = (
                 db.query(ClientModel)
@@ -189,8 +173,7 @@ def supplier_sync(
             if hc_clients:
                 result = {"created": 0, "updated": 0, "skipped": 0, "errors": []}
                 for hc_client in hc_clients:
-                    from app.services.crypto_service import decrypt as _decrypt
-                    cli_pass = _decrypt(hc_client.housecargo_password_encrypted)
+                    cli_pass = decrypt(hc_client.housecargo_password_encrypted)
                     r = housecargo_service.sync(
                         supplier.id, hc_client.housecargo_username, cli_pass, db,
                         client_id=hc_client.id
@@ -198,9 +181,23 @@ def supplier_sync(
                     for k in ("created", "updated", "skipped"):
                         result[k] += r[k]
                     result["errors"].extend(r["errors"])
-            else:
+            elif supplier.login_username and supplier.login_password_encrypted:
+                password = decrypt(supplier.login_password_encrypted)
                 result = housecargo_service.sync(supplier.id, supplier.login_username, password, db)
+            else:
+                return templates.TemplateResponse(
+                    request, "suppliers/sync_result.html",
+                    context={"current_user": current_user, "supplier": supplier, "can": can,
+                             "error": "No HouseCargo credentials configured. Add credentials on each client's detail page.", "result": None},
+                )
         elif supplier.platform == "shipx":
+            if not supplier.login_username or not supplier.login_password_encrypted:
+                return templates.TemplateResponse(
+                    request, "suppliers/sync_result.html",
+                    context={"current_user": current_user, "supplier": supplier, "can": can,
+                             "error": "Credentials are not configured for this supplier.", "result": None},
+                )
+            password = decrypt(supplier.login_password_encrypted)
             result = shipx_service.sync(supplier.id, supplier.login_username, password, db)
         else:
             result = None

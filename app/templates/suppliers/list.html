@@ -34,7 +34,7 @@
         <td class="px-4 py-3 text-gray-500">{{ s.country or "—" }}</td>
         <td class="px-4 py-3 text-gray-500">{{ s.platform or "—" }}</td>
         <td class="px-4 py-3 flex items-center gap-2">
-          {% if s.platform in ('housecargo', 'shipx') and s.login_username and s.login_password_encrypted %}
+          {% if s.platform == 'housecargo' or (s.platform == 'shipx' and s.login_username and s.login_password_encrypted) %}
           <form method="post" action="/suppliers/{{ s.id }}/sync">
             <button type="submit" class="text-emerald-600 hover:underline text-xs font-medium">Sync</button>
           </form>
