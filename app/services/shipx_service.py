@@ -280,6 +280,12 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
             skipped += 1
             continue
 
+        # Already-delivered order not in our DB = old completed order, skip
+        label_status = (label_ext.get("status") or "").strip().lower()
+        if parcel is None and label_status == "delivered":
+            skipped += 1
+            continue
+
         # Match client by address name and/or wishlist
         matched_client_id, matched_asin, match_source, is_wrong_address = \
             _match_client_for_order(order, supplier_id, db)

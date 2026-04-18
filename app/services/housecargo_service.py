@@ -279,6 +279,11 @@ def sync(supplier_id: int, username: str, password: str, db,
             # Map housecargo delivery status to our status
             is_delivered = "deliver" in track_status.lower()
 
+            if parcel is None and is_delivered:
+                # Already-delivered parcel not in our DB = old completed order, skip
+                skipped += 1
+                continue
+
             if parcel is None:
                 # Fetch title from Keepa if ASIN available (best-effort)
                 title = None
