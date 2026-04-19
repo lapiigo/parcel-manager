@@ -119,12 +119,24 @@ def get_product_info(asin: str, delivery_dt: datetime, multiplier: float = 0.45)
 
 
 def get_title_only(asin: str) -> Optional[str]:
-    """Fetch only the product title (no price history needed)."""
+    """Fetch only the product title — uses history=0 to cost 1 token instead of ~10."""
+    api_key = os.getenv("KEEPA_API_KEY", "")
+    if not api_key:
+        return None
     try:
-        product = _fetch_product(asin)
-        t = product.get("title")
+        r = requests.get(
+            _API_URL,
+            params={"key": api_key, "domain": 1, "asin": asin, "history": 0},
+            timeout=20,
+        )
+        if r.status_code != 200:
+            return None
+        products = (r.json().get("products") or [])
+        if not products:
+            return None
+        t = products[0].get("title")
         return str(t).strip()[:500] if t else None
-    except KeepaError:
+    except Exception:
         return None
 
 
