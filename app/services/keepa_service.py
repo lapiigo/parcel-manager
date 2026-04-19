@@ -118,8 +118,19 @@ def get_product_info(asin: str, delivery_dt: datetime, multiplier: float = 0.45)
     return KeepaResult(title=title, amazon_price=amazon_price, cost=cost)
 
 
+_TITLE_NOT_FOUND = ""  # sentinel: API succeeded but no title (don't retry)
+# None return means API error / rate limit → caller should NOT persist, retry later
+
+
 def get_title_only(asin: str) -> Optional[str]:
-    """Fetch only the product title — uses history=0 to cost 1 token instead of ~10."""
+    """
+    Fetch only the product title (history=0 → 1 token).
+
+    Returns:
+      str   — title found
+      ""    — API OK but no title for this ASIN (persist, don't retry)
+      None  — API/network error or rate limit (do NOT persist, retry later)
+    """
     api_key = os.getenv("KEEPA_API_KEY", "")
     if not api_key:
         return None
@@ -129,15 +140,22 @@ def get_title_only(asin: str) -> Optional[str]:
             params={"key": api_key, "domain": 1, "asin": asin, "history": 0},
             timeout=20,
         )
-        if r.status_code != 200:
-            return None
-        products = (r.json().get("products") or [])
-        if not products:
-            return None
-        t = products[0].get("title")
-        return str(t).strip()[:500] if t else None
+    except Exception:
+        return None  # network error → retry later
+
+    if r.status_code != 200:
+        return None  # rate limit / server error → retry later
+
+    try:
+        products = r.json().get("products") or []
     except Exception:
         return None
+
+    if not products:
+        return _TITLE_NOT_FOUND  # valid response, ASIN simply not in Keepa
+
+    t = products[0].get("title")
+    return str(t).strip()[:500] if t else _TITLE_NOT_FOUND
 
 
 # Keep backward-compat alias used in parcels router
