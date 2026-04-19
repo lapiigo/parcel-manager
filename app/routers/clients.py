@@ -239,12 +239,16 @@ async def wishlist_upload(
     qty_map: dict[str, int] = {}
 
     for line in lines:
-        asins_in_line = [m.upper() for m in _ASIN_RE.findall(line)]
-        if not asins_in_line:
+        matches = list(_ASIN_RE.finditer(line.upper()))
+        if not matches:
             continue
-        nums = _re.findall(r'(?<![.\d])\b([1-9][0-9]*)\b(?![.\d])', line)
-        qty = int(nums[0]) if nums else 1
-        for asin in asins_in_line:
+        for i, m in enumerate(matches):
+            asin = m.group(0)
+            # Look for qty in the segment between this ASIN and the next one
+            seg_end = matches[i + 1].start() if i + 1 < len(matches) else len(line)
+            segment = line[m.end():seg_end]
+            nums = _re.findall(r'(?<![.\d])\b([1-9][0-9]*)\b(?![.\d])', segment)
+            qty = int(nums[0]) if nums else 1
             if asin not in qty_map:
                 qty_map[asin] = qty
 
