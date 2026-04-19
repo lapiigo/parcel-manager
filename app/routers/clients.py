@@ -86,6 +86,9 @@ def client_detail(
     hc_suppliers = db.query(Supplier).filter(Supplier.platform == "housecargo").all()
     sx_suppliers = db.query(Supplier).filter(Supplier.platform == "shipx").all()
     upload_msg = request.query_params.get("upload_msg", "")
+    wl_added   = request.query_params.get("wl_added", "")
+    wl_updated = request.query_params.get("wl_updated", "")
+    wl_deleted = request.query_params.get("wl_deleted", "")
 
     return templates.TemplateResponse(
         request, "clients/detail.html",
@@ -95,6 +98,9 @@ def client_detail(
             "hc_suppliers": hc_suppliers,
             "sx_suppliers": sx_suppliers,
             "upload_msg": upload_msg,
+            "wl_added": wl_added,
+            "wl_updated": wl_updated,
+            "wl_deleted": wl_deleted,
             "can": can,
         },
     )
@@ -215,8 +221,9 @@ async def wishlist_upload(
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
-    """Save ASINs instantly (no Keepa calls). Titles are fetched separately via SSE."""
+    """Full wishlist sync from file: add new, update qty, delete removed. No Keepa calls."""
     import re as _re
+    import urllib.parse
     _ASIN_RE = _re.compile(r'\bB[A-Z0-9]{9}\b', _re.IGNORECASE)
 
     client = db.query(Client).filter(Client.id == client_id).first()
@@ -235,41 +242,56 @@ async def wishlist_upload(
     if not lines:
         return RedirectResponse(f"/clients/{client_id}", status_code=302)
 
-    existing_asins = {w.asin for w in client.wishlist_items}
-    qty_map: dict[str, int] = {}
-
+    # Parse file → {asin: qty}
+    file_qty_map: dict[str, int] = {}
     for line in lines:
         matches = list(_ASIN_RE.finditer(line.upper()))
         if not matches:
             continue
         for i, m in enumerate(matches):
             asin = m.group(0)
-            # Look for qty in the segment between this ASIN and the next one
             seg_end = matches[i + 1].start() if i + 1 < len(matches) else len(line)
             segment = line[m.end():seg_end]
             nums = _re.findall(r'(?<![.\d])\b([1-9][0-9]*)\b(?![.\d])', segment)
             qty = int(nums[0]) if nums else 1
-            if asin not in qty_map:
-                qty_map[asin] = qty
+            if asin not in file_qty_map:
+                file_qty_map[asin] = qty
 
-    added = 0
-    for asin_raw, qty in qty_map.items():
-        if asin_raw not in existing_asins:
-            db.add(WishlistItem(
-                client_id=client_id,
-                asin=asin_raw,
-                title=None,  # fetched later via /wishlist/fetch-titles SSE
-                qty_per_month=qty,
-            ))
-            existing_asins.add(asin_raw)
-            added += 1
+    if not file_qty_map:
+        return RedirectResponse(
+            f"/clients/{client_id}?upload_msg={urllib.parse.quote('No ASINs found in file.')}",
+            status_code=302,
+        )
+
+    # Build existing lookup {asin: WishlistItem}
+    existing: dict[str, WishlistItem] = {w.asin: w for w in client.wishlist_items}
+
+    n_added = n_updated = n_deleted = 0
+
+    # Add new / update qty for existing
+    for asin, qty in file_qty_map.items():
+        if asin in existing:
+            if existing[asin].qty_per_month != qty:
+                existing[asin].qty_per_month = qty
+                n_updated += 1
+        else:
+            db.add(WishlistItem(client_id=client_id, asin=asin, title=None, qty_per_month=qty))
+            n_added += 1
+
+    # Delete items not present in file
+    for asin, item in existing.items():
+        if asin not in file_qty_map:
+            db.delete(item)
+            n_deleted += 1
 
     db.commit()
-    import urllib.parse
-    msg = f"Added {added} ASIN(s)." if added else "No ASINs found in file."
-    return RedirectResponse(
-        f"/clients/{client_id}?upload_msg={urllib.parse.quote(msg)}", status_code=302
-    )
+
+    params = urllib.parse.urlencode({
+        "wl_added": n_added,
+        "wl_updated": n_updated,
+        "wl_deleted": n_deleted,
+    })
+    return RedirectResponse(f"/clients/{client_id}?{params}", status_code=302)
 
 
 @router.get("/{client_id}/wishlist/fetch-titles")
