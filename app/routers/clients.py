@@ -302,11 +302,10 @@ async def wishlist_fetch_titles(
                 except Exception:
                     pass
 
-                if title:
-                    db_item = stream_db.get(WishlistItem, item.id)
-                    if db_item:
-                        db_item.title = title
-                        stream_db.commit()
+                db_item = stream_db.get(WishlistItem, item.id)
+                if db_item:
+                    db_item.title = title or ""  # "" = tried but no result, won't retry
+                    stream_db.commit()
 
                 payload = json.dumps({
                     "current": i,
