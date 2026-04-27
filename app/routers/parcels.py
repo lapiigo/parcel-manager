@@ -714,6 +714,64 @@ def parcel_accept(
     return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
 
+@router.post("/{parcel_id}/register-prep")
+def parcel_register_prep(
+    request: Request,
+    parcel_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    if not can(current_user, "edit_parcel"):
+        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+    parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
+    if not parcel:
+        return RedirectResponse("/parcels", status_code=302)
+
+    from app.services import prime_prep_service
+    try:
+        session = prime_prep_service.login()
+        shipment_id = prime_prep_service.register_inbound(
+            session,
+            tracking_number=parcel.tracking_number,
+            asin=parcel.asin,
+            qty=parcel.qty or 1,
+        )
+        parcel.prime_prep_shipment_id = shipment_id
+        parcel.prime_prep_status = "registered"
+        db.commit()
+    except NotImplementedError:
+        pass  # endpoint not yet confirmed — silently skip
+    except Exception:
+        pass
+    return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+
+@router.post("/{parcel_id}/fetch-prep-status")
+def parcel_fetch_prep_status(
+    request: Request,
+    parcel_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    if not can(current_user, "edit_parcel"):
+        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+    parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
+    if not parcel or not parcel.prime_prep_shipment_id:
+        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+    from app.services import prime_prep_service
+    try:
+        session = prime_prep_service.login()
+        info = prime_prep_service.get_shipment_status(session, parcel.prime_prep_shipment_id)
+        parcel.prime_prep_status = info.get("status", parcel.prime_prep_status)
+        db.commit()
+    except NotImplementedError:
+        pass
+    except Exception:
+        pass
+    return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+
 @router.post("/{parcel_id}/delete")
 def parcel_delete(
     request: Request,

@@ -30,6 +30,9 @@ class Parcel(Base):
     height_cm = Column(Float, nullable=True)
     notes = Column(Text, nullable=True)
     arrived_at = Column(DateTime, nullable=True)
+    # Prime Prep integration
+    prime_prep_shipment_id = Column(String(100), nullable=True)
+    prime_prep_status = Column(String(50), nullable=True)
     # Payment: when set → parcel is paid; value = report date (tag)
     payment_report_date = Column(String(10), nullable=True, index=True)  # "YYYY-MM-DD"
     created_at = Column(DateTime, server_default=func.now())

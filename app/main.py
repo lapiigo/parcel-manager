@@ -103,6 +103,8 @@ def startup():
         ("users", "timezone", "VARCHAR(50) DEFAULT 'UTC'"),
         ("users", "permissions", "TEXT"),
         ("todo_projects", "is_archived", "INTEGER DEFAULT 0"),
+        ("parcels", "prime_prep_shipment_id", "VARCHAR(100)"),
+        ("parcels", "prime_prep_status", "VARCHAR(50)"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in new_columns:
