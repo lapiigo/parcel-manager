@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import requests
@@ -321,6 +321,16 @@ def _attach_sku(
     return f"[not-found find={find_hint}] saveQuickSku errors={create_errors}"
 
 
+def _expected_arrival_date(days_ahead: int = 3) -> str:
+    """Today + days_ahead, shifted forward if it lands on a weekend."""
+    d = date.today() + timedelta(days=days_ahead)
+    if d.weekday() == 5:    # Saturday → Monday
+        d += timedelta(days=2)
+    elif d.weekday() == 6:  # Sunday → Monday
+        d += timedelta(days=1)
+    return d.isoformat()
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def login() -> requests.Session:
@@ -421,7 +431,7 @@ def register_inbound(
         raise PrimePrepError("prime_prep_client_id is required (set on client profile)")
 
     if arrival_date is None:
-        arrival_date = date.today().isoformat()
+        arrival_date = _expected_arrival_date()
 
     # ── Phase 1, step 1: GET new inbound form ─────────────────────────────────
     r = session.get(
