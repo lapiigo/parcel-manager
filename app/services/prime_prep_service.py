@@ -270,10 +270,10 @@ def _attach_sku(
     sku_uuid, find_hint = _find_sku_uuid_for_asin(html, asin, excluded)
 
     if sku_uuid:
-        # Exact browser flow: set sku_id + $commit(model.live), then addItem
+        # Set sku_id + fulfillment type in one $commit, then addItem
         snap_sel, _ = _livewire_update(
             session, update_uri, csrf_token, snapshot,
-            updates={"sku_id": sku_uuid},
+            updates={"sku_id": sku_uuid, "item_fulfillment_type": "fbm"},
             calls=[{"method": "$commit", "params": [], "metadata": {"type": "model.live"}}],
             referer=referer,
         )
@@ -303,8 +303,14 @@ def _attach_sku(
     create_errors = snap_create.get("memo", {}).get("errors", [])
 
     if sku_id_after:
-        snap_add2, _ = _livewire_update(
+        snap_fbm, _ = _livewire_update(
             session, update_uri, csrf_token, snap_create,
+            updates={"item_fulfillment_type": "fbm"},
+            calls=[{"method": "$commit", "params": [], "metadata": {"type": "model.live"}}],
+            referer=referer,
+        )
+        snap_add2, _ = _livewire_update(
+            session, update_uri, csrf_token, snap_fbm,
             updates={"expected_qty": qty},
             calls=[{"method": "addItem", "params": [], "metadata": {}}],
             referer=referer,
