@@ -370,24 +370,42 @@ def register_inbound(
         calls=[{"method": "finalize", "params": [], "metadata": {}}],
     )
 
-    # Extract shipment UUID from redirect URL (primary source)
+    # Extract shipment UUID — check every likely location in the response
     shipment_uuid: Optional[str] = None
-    redirect = effects.get("redirect", "")
-    if redirect:
-        m = re.search(r"/inbound/([0-9a-f-]{36})", redirect)
+
+    # 1. effects.redirect  (most common in Livewire 3)
+    for key in ("redirect", "path", "url"):
+        val = effects.get(key, "")
+        if val:
+            m = re.search(r"/inbound/([0-9a-f-]{36})", val)
+            if m:
+                shipment_uuid = m.group(1)
+                break
+
+    # 2. snap_final memo.path (component path updates after finalize)
+    if not shipment_uuid:
+        memo_path = snap_final.get("memo", {}).get("path", "")
+        m = re.search(r"/inbound/([0-9a-f-]{36})", memo_path)
         if m:
             shipment_uuid = m.group(1)
 
-    # Fallback: inbound model key from draft snapshot (set during step 2)
+    # 3. inbound model key in snap_final data
     if not shipment_uuid:
-        inbound_field = snap1.get("data", {}).get("inbound")
-        if isinstance(inbound_field, list) and len(inbound_field) > 1:
-            inbound_model = inbound_field[1]
-            if isinstance(inbound_model, dict):
-                shipment_uuid = inbound_model.get("key")
+        for snap in (snap_final, snap1):
+            inbound_field = snap.get("data", {}).get("inbound")
+            if isinstance(inbound_field, list) and len(inbound_field) > 1:
+                inbound_model = inbound_field[1]
+                if isinstance(inbound_model, dict) and inbound_model.get("key"):
+                    shipment_uuid = inbound_model["key"]
+                    break
 
     if not shipment_uuid:
-        raise PrimePrepError("Could not extract shipment UUID from prime-prep response")
+        raise PrimePrepError(
+            f"Could not extract shipment UUID. "
+            f"effects keys={list(effects.keys())}, "
+            f"redirect={effects.get('redirect','')!r}, "
+            f"memo_path={snap_final.get('memo',{}).get('path','')!r}"
+        )
 
     # ── Phase 2: attach SKU on the edit page ─────────────────────────────────
     if asin:
