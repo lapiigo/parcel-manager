@@ -1,9 +1,10 @@
 """
 Prime Prep service (prime-prep.com).
 
-Credentials are read from .env — never hardcoded:
+Credentials and config are read from .env — never hardcoded:
   PRIME_PREP_EMAIL=...
   PRIME_PREP_PASSWORD=...
+  PRIME_PREP_WAREHOUSE_ID=...   (UUID of the warehouse in prime-prep's system)
 
 Auth flow (Livewire 3):
   1. GET /login → extract XSRF-TOKEN cookie, CSRF _token, and auth.login
@@ -12,9 +13,11 @@ Auth flow (Livewire 3):
      A successful response has effects.redirect set.
   3. The requests.Session retains the new session cookie for subsequent calls.
 
-Shipment flow (to be extended once API endpoints are confirmed):
-  register_inbound(session, tracking, asin, qty) → prime_prep_shipment_id
-  get_shipment_status(session, shipment_id)       → dict with status info
+Inbound registration flow:
+  1. GET /warehouse/inbound/new → extract warehouse.inbound.form snapshot.
+  2. POST update with client_id → draft inbound record created, shipment UUID assigned.
+  3. POST update with remaining fields + finalize call → shipment confirmed.
+  4. Return the shipment UUID (stored as prime_prep_shipment_id on Parcel).
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import date
 from typing import Optional
 
 import requests
@@ -56,6 +60,97 @@ def _xsrf_header(session: requests.Session) -> str:
     return requests.utils.unquote(raw)
 
 
+def _extract_update_uri(html: str) -> str:
+    m = re.search(r'"uri"\s*:\s*"(/livewire[^"]+)"', html)
+    if not m:
+        m = re.search(r'data-update-uri="(/livewire[^"]+)"', html)
+    return BASE_URL + (m.group(1) if m else "/livewire-5c96e4c8/update")
+
+
+def _extract_csrf(html: str) -> str:
+    m = re.search(r'"csrf"\s*:\s*"([^"]+)"', html)
+    if not m:
+        m = re.search(r'<meta name="csrf-token" content="([^"]+)"', html)
+    return m.group(1) if m else ""
+
+
+def _extract_component_snapshot(html: str, component_name: str) -> Optional[dict]:
+    """Find and parse wire:snapshot for a named Livewire component."""
+    for m in re.finditer(r'wire:snapshot="((?:[^"\\]|\\.)*)"', html):
+        raw = m.group(1).replace("&quot;", '"').replace("&amp;", "&")
+        try:
+            snap = json.loads(raw)
+            if snap.get("memo", {}).get("name") == component_name:
+                return snap
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _livewire_update(
+    session: requests.Session,
+    update_uri: str,
+    csrf_token: str,
+    snapshot: dict,
+    updates: dict,
+    calls: list,
+    referer: str = "/warehouse/inbound/new",
+) -> tuple[dict, dict]:
+    """POST a Livewire update. Returns (new_snapshot_dict, effects_dict)."""
+    payload = {
+        "_token": csrf_token,
+        "components": [{
+            "snapshot": json.dumps(snapshot),
+            "updates": updates,
+            "calls": calls,
+        }],
+    }
+    r = session.post(
+        update_uri,
+        json=payload,
+        headers={
+            **_HEADERS,
+            "accept": "*/*",
+            "content-type": "application/json",
+            "origin": BASE_URL,
+            "referer": BASE_URL + referer,
+            "x-livewire": "1",
+            "x-xsrf-token": _xsrf_header(session),
+        },
+        timeout=15,
+    )
+    if r.status_code != 200:
+        raise PrimePrepError(f"Livewire update HTTP {r.status_code}: {r.text[:200]}")
+
+    data = r.json()
+    components = data.get("components") or []
+    if not components:
+        raise PrimePrepError("Empty components in Livewire response")
+
+    comp = components[0]
+    effects = comp.get("effects", {})
+    try:
+        new_snapshot = json.loads(comp.get("snapshot", "{}"))
+    except json.JSONDecodeError:
+        new_snapshot = {}
+
+    return new_snapshot, effects
+
+
+def _detect_carrier(tracking: str) -> str:
+    t = tracking.strip().upper()
+    if t.startswith("1Z"):
+        return "ups"
+    digits = re.sub(r"\D", "", t)
+    if len(digits) in (12, 15, 20):
+        return "fedex"
+    if t.startswith("9") and len(digits) >= 20:
+        return "usps"
+    if len(digits) == 10 and t[0].isdigit():
+        return "dhl"
+    return "other"
+
+
 def login() -> requests.Session:
     """
     Authenticate with prime-prep.com and return an authenticated session.
@@ -74,21 +169,10 @@ def login() -> requests.Session:
         raise PrimePrepError(f"Login page HTTP {r.status_code}")
 
     html = r.text
-
-    # Extract Livewire update URI (looks like /livewire-xxxxxxxx/update)
-    uri_match = re.search(r'"uri"\s*:\s*"(/livewire[^"]+)"', html)
-    if not uri_match:
-        uri_match = re.search(r'data-update-uri="(/livewire[^"]+)"', html)
-    update_uri = BASE_URL + (uri_match.group(1) if uri_match else "/livewire-5c96e4c8/update")
-
-    # Extract Laravel CSRF _token
-    csrf_match = re.search(r'"csrf"\s*:\s*"([^"]+)"', html)
-    if not csrf_match:
-        csrf_match = re.search(r'<meta name="csrf-token" content="([^"]+)"', html)
-    csrf_token = csrf_match.group(1) if csrf_match else ""
+    update_uri = _extract_update_uri(html)
+    csrf_token = _extract_csrf(html)
 
     # Extract auth.login Livewire component snapshot
-    # wire:snapshot attribute value is HTML-entity-encoded JSON
     snap_match = re.search(r'wire:snapshot="((?:[^"\\]|\\.)*)"\s', html)
     if not snap_match:
         raise PrimePrepError("auth.login component snapshot not found on login page")
@@ -139,7 +223,6 @@ def login() -> requests.Session:
     effects = components[0].get("effects", {}) if components else {}
 
     if not effects.get("redirect"):
-        # Check for validation errors in snapshot
         try:
             snap_back = json.loads(components[0].get("snapshot", "{}"))
             errors = snap_back.get("memo", {}).get("errors", [])
@@ -147,37 +230,140 @@ def login() -> requests.Session:
                 raise PrimePrepError(f"Login validation errors: {errors}")
         except (json.JSONDecodeError, IndexError):
             pass
-        # No redirect but no errors — might still be ok (session cookie set)
 
-    # Verify session cookie exists
     if not session.cookies.get("prime-prep-session"):
         raise PrimePrepError("No session cookie after login — credentials may be wrong")
 
     return session
 
 
-# ── Inbound shipment API (stubs — endpoints to be confirmed) ──────────────────
-
 def register_inbound(
     session: requests.Session,
     tracking_number: str,
     asin: Optional[str],
     qty: int,
+    prime_prep_client_id: str,
+    order_number: str = "",
+    arrival_date: Optional[str] = None,
 ) -> str:
     """
     Register an expected inbound shipment with prime-prep.
-    Returns the shipment ID assigned by prime-prep.
+    Returns the shipment UUID assigned by prime-prep.
 
-    TODO: fill in correct endpoint + payload once confirmed.
+    Args:
+        prime_prep_client_id: UUID of the client in prime-prep's system
+                              (stored as Client.prime_prep_client_id).
+        order_number: Amazon order ID or our external_order_id (optional).
+        arrival_date: Expected arrival date as "YYYY-MM-DD"; defaults to today.
     """
-    raise NotImplementedError("register_inbound endpoint not yet confirmed")
+    warehouse_id = os.getenv("PRIME_PREP_WAREHOUSE_ID", "")
+    if not warehouse_id:
+        raise PrimePrepError("PRIME_PREP_WAREHOUSE_ID not set in .env")
+    if not prime_prep_client_id:
+        raise PrimePrepError("prime_prep_client_id is required (set on client profile)")
+
+    if arrival_date is None:
+        arrival_date = date.today().isoformat()
+
+    # ── Step 1: GET the new inbound form ─────────────────────────────────────
+    r = session.get(
+        BASE_URL + "/warehouse/inbound/new",
+        headers={**_HEADERS, "accept": "text/html,*/*"},
+        timeout=15,
+    )
+    if r.status_code != 200:
+        raise PrimePrepError(f"Inbound form page HTTP {r.status_code}")
+
+    html = r.text
+    update_uri = _extract_update_uri(html)
+    csrf_token = _extract_csrf(html)
+
+    snapshot = _extract_component_snapshot(html, "warehouse.inbound.form")
+    if snapshot is None:
+        raise PrimePrepError("warehouse.inbound.form component not found — page structure changed")
+
+    # ── Step 2: Set client_id → server creates the draft inbound record ───────
+    snap1, _ = _livewire_update(
+        session, update_uri, csrf_token, snapshot,
+        updates={"client_id": prime_prep_client_id},
+        calls=[],
+    )
+
+    # Grab shipment UUID from the draft inbound model in snapshot
+    inbound_field = snap1.get("data", {}).get("inbound")
+    shipment_uuid: Optional[str] = None
+    if isinstance(inbound_field, list) and len(inbound_field) > 1:
+        inbound_model = inbound_field[1]
+        if isinstance(inbound_model, dict):
+            shipment_uuid = inbound_model.get("key")
+
+    # ── Step 3: Fill remaining fields + finalize ──────────────────────────────
+    snap2, effects = _livewire_update(
+        session, update_uri, csrf_token, snap1,
+        updates={
+            "warehouse_id": warehouse_id,
+            "reference_number": tracking_number,
+            "order_number": order_number,
+            "carrier_type": _detect_carrier(tracking_number),
+            "arrival_date": arrival_date,
+            "expected_qty": qty,
+        },
+        calls=[{"method": "finalize", "params": [], "metadata": {}}],
+    )
+
+    # Prefer UUID from redirect URL (most reliable)
+    redirect = effects.get("redirect", "")
+    if redirect:
+        m = re.search(r"/inbound/([0-9a-f-]{36})", redirect)
+        if m:
+            shipment_uuid = m.group(1)
+
+    if not shipment_uuid:
+        raise PrimePrepError("Could not extract shipment UUID from prime-prep response")
+
+    return shipment_uuid
 
 
 def get_shipment_status(session: requests.Session, shipment_id: str) -> dict:
     """
-    Fetch reception status for a specific shipment.
-    Returns dict with keys: status, received_qty, issues (list), raw (full response).
-
-    TODO: fill in correct endpoint once confirmed.
+    Fetch reception status for a specific inbound shipment.
+    Returns dict with keys: status, received_qty, issues (list), raw (full data).
     """
-    raise NotImplementedError("get_shipment_status endpoint not yet confirmed")
+    r = session.get(
+        BASE_URL + f"/warehouse/inbound/{shipment_id}",
+        headers={**_HEADERS, "accept": "text/html,*/*"},
+        timeout=15,
+    )
+    if r.status_code != 200:
+        raise PrimePrepError(f"Inbound detail HTTP {r.status_code}")
+
+    html = r.text
+
+    for name in ("warehouse.inbound.show", "warehouse.inbound.detail", "warehouse.inbound.view"):
+        snapshot = _extract_component_snapshot(html, name)
+        if snapshot:
+            data = snapshot.get("data", {})
+            inbound = data.get("inbound") or {}
+            if isinstance(inbound, list):
+                inbound = inbound[1] if len(inbound) > 1 else {}
+            status = (
+                inbound.get("status")
+                or inbound.get("state")
+                or data.get("status")
+                or "unknown"
+            )
+            return {
+                "status": status,
+                "received_qty": inbound.get("received_qty") or inbound.get("quantity_received"),
+                "issues": inbound.get("issues", []),
+                "raw": data,
+            }
+
+    # Fallback: scrape status text from page
+    m = re.search(r'(?:status|state)["\s:>]+([a-z_]+)', html, re.IGNORECASE)
+    return {
+        "status": m.group(1) if m else "unknown",
+        "received_qty": None,
+        "issues": [],
+        "raw": {},
+    }

@@ -173,6 +173,23 @@ def client_housecargo_save(
     return RedirectResponse(f"/clients/{client_id}", status_code=302)
 
 
+# ── Prime Prep ────────────────────────────────────────────────────────────────
+
+@router.post("/{client_id}/prime-prep")
+def client_prime_prep_save(
+    request: Request,
+    client_id: int,
+    prime_prep_client_id: str = Form(""),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if client and can(current_user, "edit_client"):
+        client.prime_prep_client_id = prime_prep_client_id.strip() or None
+        db.commit()
+    return RedirectResponse(f"/clients/{client_id}", status_code=302)
+
+
 # ── Wishlist ──────────────────────────────────────────────────────────────────
 
 @router.post("/{client_id}/wishlist/add")

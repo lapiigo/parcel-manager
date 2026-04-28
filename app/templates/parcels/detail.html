@@ -43,6 +43,13 @@
 </div>
 {% endif %}
 
+{% if prep_error %}
+<div class="mb-4 px-4 py-3 rounded-lg text-sm flex items-start gap-2 bg-red-50 border border-red-200 text-red-700">
+  <span class="font-semibold">✗</span>
+  <span>Prime Prep: {{ prep_error }}</span>
+</div>
+{% endif %}
+
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
   <!-- Left: Info + Status -->

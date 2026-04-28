@@ -400,6 +400,7 @@ def parcel_detail(
     request: Request,
     parcel_id: int,
     cost_msg: str = Query(""),
+    prep_error: str = Query(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
@@ -442,6 +443,7 @@ def parcel_detail(
             "VALID_TRANSITIONS": VALID_TRANSITIONS,
             "can": can,
             "cost_flash": cost_flash,
+            "prep_error": prep_error,
         },
     )
 
@@ -727,23 +729,36 @@ def parcel_register_prep(
     if not parcel:
         return RedirectResponse("/parcels", status_code=302)
 
+    if not parcel.client_id:
+        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
     from app.services import prime_prep_service
+    from app.models.client import Client
+    client = db.query(Client).filter(Client.id == parcel.client_id).first()
+    prime_prep_client_id = client.prime_prep_client_id if client else None
+
+    error_msg = ""
     try:
-        session = prime_prep_service.login()
+        pp_session = prime_prep_service.login()
         shipment_id = prime_prep_service.register_inbound(
-            session,
+            pp_session,
             tracking_number=parcel.tracking_number,
             asin=parcel.asin,
             qty=parcel.qty or 1,
+            prime_prep_client_id=prime_prep_client_id or "",
+            order_number=parcel.external_order_id or "",
         )
         parcel.prime_prep_shipment_id = shipment_id
         parcel.prime_prep_status = "registered"
         db.commit()
-    except NotImplementedError:
-        pass  # endpoint not yet confirmed — silently skip
-    except Exception:
-        pass
-    return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+    except prime_prep_service.PrimePrepError as exc:
+        error_msg = str(exc)
+    except Exception as exc:
+        error_msg = str(exc)
+
+    import urllib.parse
+    params = f"?prep_error={urllib.parse.quote(error_msg)}" if error_msg else ""
+    return RedirectResponse(f"/parcels/{parcel_id}{params}", status_code=302)
 
 
 @router.post("/{parcel_id}/fetch-prep-status")

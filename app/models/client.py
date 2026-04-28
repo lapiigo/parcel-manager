@@ -21,6 +21,9 @@ class Client(Base):
     housecargo_username = Column(String(255), nullable=True)
     housecargo_password_encrypted = Column(Text, nullable=True)
 
+    # Prime Prep integration: UUID of this client in prime-prep's system
+    prime_prep_client_id = Column(String(36), nullable=True)
+
     parcels = relationship("Parcel", back_populates="client", foreign_keys="Parcel.client_id")
     orders = relationship("Order", back_populates="client")
     reports = relationship("Report", back_populates="client")

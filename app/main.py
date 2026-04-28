@@ -105,6 +105,7 @@ def startup():
         ("todo_projects", "is_archived", "INTEGER DEFAULT 0"),
         ("parcels", "prime_prep_shipment_id", "VARCHAR(100)"),
         ("parcels", "prime_prep_status", "VARCHAR(50)"),
+        ("clients", "prime_prep_client_id", "VARCHAR(36)"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in new_columns:
