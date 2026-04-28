@@ -751,9 +751,10 @@ def parcel_register_prep(
             pass
 
     error_msg = ""
+    sku_warning = ""
     try:
         pp_session = prime_prep_service.login()
-        shipment_id = prime_prep_service.register_inbound(
+        shipment_id, sku_warning = prime_prep_service.register_inbound(
             pp_session,
             tracking_number=parcel.tracking_number,
             asin=parcel.asin,
@@ -771,7 +772,12 @@ def parcel_register_prep(
         error_msg = str(exc)
 
     import urllib.parse
-    params = f"?prep_error={urllib.parse.quote(error_msg)}" if error_msg else ""
+    if error_msg:
+        params = f"?prep_error={urllib.parse.quote(error_msg)}"
+    elif sku_warning:
+        params = f"?prep_error={urllib.parse.quote('SKU not attached: ' + sku_warning)}"
+    else:
+        params = ""
     return RedirectResponse(f"/parcels/{parcel_id}{params}", status_code=302)
 
 

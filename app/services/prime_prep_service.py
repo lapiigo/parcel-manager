@@ -160,11 +160,10 @@ def _attach_sku(
     prime_prep_client_id: str,
     asin: str,
     title: str,
-) -> None:
+) -> str:
     """
     Phase 2: open the edit page and attach a SKU to an existing inbound.
-    Searches for an existing SKU by ASIN; creates a new one if not found.
-    Errors are swallowed — SKU attachment failure should not block the caller.
+    Returns empty string on success, or an error/diagnostic string on failure.
     """
     referer = f"/warehouse/inbound/{shipment_uuid}"
 
@@ -174,14 +173,18 @@ def _attach_sku(
         timeout=15,
     )
     if r.status_code != 200:
-        return
+        return f"edit page HTTP {r.status_code}"
 
     html = r.text
     update_uri = _extract_update_uri(html)
     csrf_token = _extract_csrf(html)
     snapshot = _extract_component_snapshot(html, "warehouse.inbound.form")
     if snapshot is None:
-        return
+        # List all component names found to help diagnose
+        names = []
+        for m in re.finditer(r'"name"\s*:\s*"([^"]+)"', html):
+            names.append(m.group(1))
+        return f"warehouse.inbound.form not found on edit page; components: {names[:5]}"
 
     # ── Search for existing SKU by ASIN ──────────────────────────────────────
     snap_search, effects_search = _livewire_update(
@@ -195,7 +198,7 @@ def _attach_sku(
 
     # Auto-selected by server (single exact match)
     if data_search.get("sku_id"):
-        return
+        return ""
 
     # Parse Livewire HTML patch for SKU UUIDs in the dropdown
     excluded = {
@@ -207,17 +210,16 @@ def _attach_sku(
     found_uuids = [u for u in _UUID_RE.findall(html_patch) if u.lower() not in excluded]
 
     if found_uuids:
-        # Select the first matching SKU
         _livewire_update(
             session, update_uri, csrf_token, snap_search,
             updates={"sku_id": found_uuids[0]},
             calls=[{"method": "$commit", "params": [], "metadata": {"type": "model.live"}}],
             referer=referer,
         )
-        return
+        return ""
 
     # ── SKU not found — create a new one ─────────────────────────────────────
-    _livewire_update(
+    snap_create, _ = _livewire_update(
         session, update_uri, csrf_token, snap_search,
         updates={
             "showQuickSkuModal": True,
@@ -227,6 +229,19 @@ def _attach_sku(
         },
         calls=[{"method": "saveQuickSku", "params": [], "metadata": {}}],
         referer=referer,
+    )
+
+    sku_id_after = snap_create.get("data", {}).get("sku_id")
+    if sku_id_after:
+        return ""
+
+    errors = snap_create.get("memo", {}).get("errors", [])
+    html_patch_after = effects_search.get("html", "")
+    return (
+        f"saveQuickSku did not set sku_id. "
+        f"errors={errors}, "
+        f"html_patch_len={len(html_patch)}, "
+        f"found_uuids_before_create={found_uuids}"
     )
 
 
@@ -408,13 +423,14 @@ def register_inbound(
         )
 
     # ── Phase 2: attach SKU on the edit page ─────────────────────────────────
+    sku_error = ""
     if asin:
         try:
-            _attach_sku(session, shipment_uuid, prime_prep_client_id, asin, title)
-        except Exception:
-            pass  # SKU failure never blocks the registration result
+            sku_error = _attach_sku(session, shipment_uuid, prime_prep_client_id, asin, title)
+        except Exception as exc:
+            sku_error = str(exc)
 
-    return shipment_uuid
+    return shipment_uuid, sku_error
 
 
 def get_shipment_status(session: requests.Session, shipment_id: str) -> dict:
