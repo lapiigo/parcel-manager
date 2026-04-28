@@ -160,6 +160,7 @@ def _attach_sku(
     prime_prep_client_id: str,
     asin: str,
     title: str,
+    qty: int = 1,
 ) -> str:
     """
     Phase 2: open the edit page and attach a SKU to an existing inbound.
@@ -211,24 +212,18 @@ def _attach_sku(
 
     if found_uuids:
         sku_id = found_uuids[0]
-        # Send sku_id update and finalize in a single request (mirrors browser behaviour)
-        snap_fin, eff_fin = _livewire_update(
+        # Set sku_id + expected_qty then call addItem — mirrors exactly what the browser does
+        snap_add, eff_add = _livewire_update(
             session, update_uri, csrf_token, snap_search,
-            updates={"sku_id": sku_id},
-            calls=[{"method": "finalize", "params": [], "metadata": {}}],
+            updates={"sku_id": sku_id, "expected_qty": qty},
+            calls=[{"method": "addItem", "params": [], "metadata": {}}],
             referer=referer,
         )
-        sku_after = snap_fin.get("data", {}).get("sku_id")
-        fin_redirect = eff_fin.get("redirect") or eff_fin.get("path") or eff_fin.get("url") or ""
-        fin_errors = snap_fin.get("memo", {}).get("errors", [])
-        all_uuids_in_patch = _UUID_RE.findall(html_patch)
-        return (
-            f"[select+finalize-combined] uuid={sku_id} sku_after={sku_after} "
-            f"redirect={fin_redirect!r} errors={fin_errors} "
-            f"patch_uuids={all_uuids_in_patch[:5]}"
-        )
+        sku_after = snap_add.get("data", {}).get("sku_id")
+        add_errors = snap_add.get("memo", {}).get("errors", [])
+        return f"[selected+addItem] uuid={sku_id} sku_after={sku_after} errors={add_errors}"
 
-    # ── SKU not found — create a new one, then finalize to persist ────────────
+    # ── SKU not found — create a new one via saveQuickSku, then addItem ──────
     snap_create, _ = _livewire_update(
         session, update_uri, csrf_token, snap_search,
         updates={
@@ -245,15 +240,14 @@ def _attach_sku(
     errors = snap_create.get("memo", {}).get("errors", [])
 
     if sku_id_after:
-        snap_fin2, eff_fin2 = _livewire_update(
+        snap_add2, _ = _livewire_update(
             session, update_uri, csrf_token, snap_create,
-            updates={},
-            calls=[{"method": "finalize", "params": [], "metadata": {}}],
+            updates={"expected_qty": qty},
+            calls=[{"method": "addItem", "params": [], "metadata": {}}],
             referer=referer,
         )
-        fin2_redirect = eff_fin2.get("redirect") or eff_fin2.get("path") or ""
-        sku_after2 = snap_fin2.get("data", {}).get("sku_id")
-        return f"[created+finalized] sku_id={sku_id_after} sku_after={sku_after2} redirect={fin2_redirect!r}"
+        add2_errors = snap_add2.get("memo", {}).get("errors", [])
+        return f"[created+addItem] sku_id={sku_id_after} errors={add2_errors}"
 
     return (
         f"[saveQuickSku-no-id] errors={errors} "
@@ -442,7 +436,7 @@ def register_inbound(
     sku_error = ""
     if asin:
         try:
-            sku_error = _attach_sku(session, shipment_uuid, prime_prep_client_id, asin, title)
+            sku_error = _attach_sku(session, shipment_uuid, prime_prep_client_id, asin, title, qty)
         except Exception as exc:
             sku_error = str(exc)
 
