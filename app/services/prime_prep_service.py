@@ -154,33 +154,63 @@ def _detect_carrier(tracking: str) -> str:
     return "other"
 
 
-def _find_sku_uuid_for_asin(html: str, asin: str) -> Optional[str]:
+def _find_sku_uuid_for_asin(html: str, asin: str) -> tuple[Optional[str], str]:
     """
     Parse page HTML for the SKU UUID matching the given ASIN.
-    The SKU dropdown is rendered server-side; Alpine.js filters it client-side.
-    We look for a UUID that appears in the same HTML block as the ASIN text.
+    Returns (uuid_or_None, debug_hint).
+
+    Strategies (in order):
+    1. JSON key "asin":"ASIN" adjacent to "id":"UUID" — Alpine x-data / script blocks
+    2. Livewire child-component snapshot data containing the ASIN
+    3. Plain ASIN text near sku_id= pattern — server-rendered Blade dropdown
     """
-    for m in re.finditer(re.escape(asin), html, re.I):
-        # Search window: 800 chars before and 200 after — UUID usually precedes ASIN in HTML
+    asin_esc = re.escape(asin)
+
+    # Strategy 1: JSON context — "asin":"VALUE" near a UUID
+    for m in re.finditer(r'"asin"\s*:\s*"' + asin_esc + r'"', html, re.I):
+        start = max(0, m.start() - 600)
+        end = min(len(html), m.end() + 600)
+        window = html[start:end]
+        uuids = _UUID_RE.findall(window)
+        if uuids:
+            return uuids[0], "json-asin-key"
+
+    # Strategy 2: Livewire child-component snapshots that contain the ASIN
+    for snap_m in re.finditer(r'wire:snapshot="((?:[^"\\]|\\.)*)"', html):
+        raw = snap_m.group(1).replace("&quot;", '"').replace("&amp;", "&")
+        try:
+            snap = json.loads(raw)
+            data_str = json.dumps(snap.get("data", {}))
+        except json.JSONDecodeError:
+            continue
+        if asin.upper() not in data_str.upper():
+            continue
+        for m2 in re.finditer(r'"asin"\s*:\s*"' + asin_esc + r'"', data_str, re.I):
+            s = max(0, m2.start() - 600)
+            e = min(len(data_str), m2.end() + 600)
+            uuids = _UUID_RE.findall(data_str[s:e])
+            if uuids:
+                return uuids[0], "child-snapshot"
+
+    # Strategy 3: plain ASIN near sku_id= (server-rendered Blade HTML)
+    for m in re.finditer(asin_esc, html, re.I):
         start = max(0, m.start() - 800)
         end = min(len(html), m.end() + 200)
         window = html[start:end]
-
-        # Prefer UUID that appears in a sku_id / $wire.set('sku_id', ...) context
         m2 = re.search(
-            r"""(?:sku[_-]id|set\s*\(\s*['"]sku_id)"""
-            r"""[^'"]{0,20}['"]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})""",
+            r"""(?:sku[_-]id|set\s*\(\s*['"]sku_id)[^'"]{0,20}'"""
+            r"""([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})""",
             window, re.I,
         )
         if m2:
-            return m2.group(1)
+            return m2.group(1), "blade-near-asin"
 
-        # Fallback: any UUID in the window
-        uuids = _UUID_RE.findall(window)
-        if uuids:
-            return uuids[0]
-
-    return None
+    # Not found — return a small context snippet for debugging
+    first_pos = html.lower().find(asin.lower())
+    if first_pos >= 0:
+        snippet = html[max(0, first_pos - 100): first_pos + 200].replace("\n", " ")
+        return None, f"asin-found-but-no-uuid snippet={snippet[:120]!r}"
+    return None, "asin-not-in-html"
 
 
 def _attach_sku(
@@ -214,9 +244,7 @@ def _attach_sku(
         return f"warehouse.inbound.form not found; components: {names[:5]}"
 
     # ── Try to find existing SKU UUID in the page HTML ────────────────────────
-    # The dropdown is server-rendered (all SKUs) but filtered client-side by Alpine.
-    # UUID for our ASIN appears adjacent to the ASIN text in the rendered HTML.
-    sku_uuid = _find_sku_uuid_for_asin(html, asin)
+    sku_uuid, find_hint = _find_sku_uuid_for_asin(html, asin)
 
     if sku_uuid:
         # Exact browser flow: set sku_id + $commit(model.live), then addItem
@@ -233,9 +261,9 @@ def _attach_sku(
             referer=referer,
         )
         errors = snap_add.get("memo", {}).get("errors", [])
-        return f"[selected+addItem] sku={sku_uuid} errors={errors}"
+        return f"[selected+addItem hint={find_hint}] sku={sku_uuid} errors={errors}"
 
-    # ── SKU not found in HTML → create via saveQuickSku, then addItem ─────────
+    # ── SKU not found in page HTML → try to create via saveQuickSku ───────────
     snap_create, _ = _livewire_update(
         session, update_uri, csrf_token, snapshot,
         updates={
@@ -249,7 +277,7 @@ def _attach_sku(
     )
 
     sku_id_after = snap_create.get("data", {}).get("sku_id")
-    errors = snap_create.get("memo", {}).get("errors", [])
+    create_errors = snap_create.get("memo", {}).get("errors", [])
 
     if sku_id_after:
         snap_add2, _ = _livewire_update(
@@ -261,7 +289,7 @@ def _attach_sku(
         add2_errors = snap_add2.get("memo", {}).get("errors", [])
         return f"[created+addItem] sku_id={sku_id_after} errors={add2_errors}"
 
-    return f"[saveQuickSku-no-id] errors={errors}"
+    return f"[not-found find={find_hint}] saveQuickSku errors={create_errors}"
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
