@@ -210,16 +210,24 @@ def _attach_sku(
     found_uuids = [u for u in _UUID_RE.findall(html_patch) if u.lower() not in excluded]
 
     if found_uuids:
+        sku_id = found_uuids[0]
+        # Set sku_id then finalize to persist it in the database
         snap_sel, _ = _livewire_update(
             session, update_uri, csrf_token, snap_search,
-            updates={"sku_id": found_uuids[0]},
-            calls=[{"method": "$commit", "params": [], "metadata": {"type": "model.live"}}],
+            updates={"sku_id": sku_id},
+            calls=[],
             referer=referer,
         )
-        sku_after = snap_sel.get("data", {}).get("sku_id")
-        return f"[selected-from-html] uuid={found_uuids[0]} sku_id_after={sku_after}"
+        snap_fin, _ = _livewire_update(
+            session, update_uri, csrf_token, snap_sel,
+            updates={},
+            calls=[{"method": "finalize", "params": [], "metadata": {}}],
+            referer=referer,
+        )
+        sku_after = snap_fin.get("data", {}).get("sku_id")
+        return f"[selected+finalized] uuid={sku_id} sku_id_after={sku_after}"
 
-    # ── SKU not found — create a new one ─────────────────────────────────────
+    # ── SKU not found — create a new one, then finalize to persist ────────────
     snap_create, _ = _livewire_update(
         session, update_uri, csrf_token, snap_search,
         updates={
@@ -234,9 +242,18 @@ def _attach_sku(
 
     sku_id_after = snap_create.get("data", {}).get("sku_id")
     errors = snap_create.get("memo", {}).get("errors", [])
+
+    if sku_id_after:
+        snap_fin2, _ = _livewire_update(
+            session, update_uri, csrf_token, snap_create,
+            updates={},
+            calls=[{"method": "finalize", "params": [], "metadata": {}}],
+            referer=referer,
+        )
+        return f"[created+finalized] sku_id={sku_id_after}"
+
     return (
-        f"[saveQuickSku] sku_id_after={sku_id_after} "
-        f"errors={errors} "
+        f"[saveQuickSku-no-id] errors={errors} "
         f"html_patch_len={len(html_patch)}"
     )
 
