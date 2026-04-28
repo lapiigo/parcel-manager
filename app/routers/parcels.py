@@ -737,6 +737,19 @@ def parcel_register_prep(
     client = db.query(Client).filter(Client.id == parcel.client_id).first()
     prime_prep_client_id = client.prime_prep_client_id if client else None
 
+    # Fetch title from Keepa if not yet stored (needed for SKU creation)
+    title = parcel.title or ""
+    if not title and parcel.asin:
+        try:
+            from app.services import keepa_service
+            fetched = keepa_service.get_title_only(parcel.asin)
+            if fetched:
+                parcel.title = fetched
+                title = fetched
+                db.commit()
+        except Exception:
+            pass
+
     error_msg = ""
     try:
         pp_session = prime_prep_service.login()
@@ -747,7 +760,7 @@ def parcel_register_prep(
             qty=parcel.qty or 1,
             prime_prep_client_id=prime_prep_client_id or "",
             order_number=parcel.external_order_id or "",
-            title=parcel.title or "",
+            title=title,
         )
         parcel.prime_prep_shipment_id = shipment_id
         parcel.prime_prep_status = "registered"

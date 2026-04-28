@@ -6,21 +6,19 @@ Credentials and config are read from .env — never hardcoded:
   PRIME_PREP_PASSWORD=...
   PRIME_PREP_WAREHOUSE_ID=...   (UUID of the warehouse in prime-prep's system)
 
-Auth flow (Livewire 3):
-  1. GET /login → extract XSRF-TOKEN cookie, CSRF _token, and auth.login
-     component snapshot (wire:snapshot attribute).
-  2. POST /livewire-<hash>/update with the snapshot + credentials + login call.
-     A successful response has effects.redirect set.
-  3. The requests.Session retains the new session cookie for subsequent calls.
+Inbound registration — two-phase flow:
 
-Inbound registration flow:
-  1. GET /warehouse/inbound/new → extract warehouse.inbound.form snapshot.
-  2. POST update with client_id → draft inbound record created, shipment UUID assigned.
-  3. POST update with sku_search=ASIN → look for existing SKU in response.
-       Found:    POST update sku_id=<uuid> to select it.
-       Not found: POST saveQuickSku to create new SKU → get sku_id from response.
-  4. POST update with remaining fields + sku_id + finalize → shipment confirmed.
-  5. Return the shipment UUID (stored as prime_prep_shipment_id on Parcel).
+  Phase 1 — create the inbound on /warehouse/inbound/new:
+    1. GET /warehouse/inbound/new → extract warehouse.inbound.form snapshot.
+    2. POST client_id → draft record created on server, inbound UUID assigned.
+    3. POST remaining fields (tracking, carrier, date, qty) + finalize call.
+       Response effects.redirect contains /warehouse/inbound/{uuid}.
+
+  Phase 2 — attach SKU on the edit page /warehouse/inbound/{uuid}:
+    4. GET /warehouse/inbound/{uuid} → fresh snapshot.
+    5. POST sku_search=ASIN → parse response HTML for existing SKU UUID.
+       Found:     POST sku_id=<uuid> + $commit  (live model save).
+       Not found: POST saveQuickSku with quickSkuAsin + quickSkuTitle.
 """
 
 from __future__ import annotations
@@ -50,6 +48,8 @@ _UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 class PrimePrepError(Exception):
     pass
 
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_credentials() -> tuple[str, str]:
     email = os.getenv("PRIME_PREP_EMAIL", "")
@@ -154,61 +154,71 @@ def _detect_carrier(tracking: str) -> str:
     return "other"
 
 
-def _find_or_create_sku(
+def _attach_sku(
     session: requests.Session,
-    update_uri: str,
-    csrf_token: str,
-    snapshot: dict,
-    inbound_uuid: str,
+    shipment_uuid: str,
     prime_prep_client_id: str,
     asin: str,
     title: str,
-) -> tuple[Optional[str], dict]:
+) -> None:
     """
-    Find an existing SKU by ASIN or create a new one.
-    Returns (sku_id, updated_snapshot).
+    Phase 2: open the edit page and attach a SKU to an existing inbound.
+    Searches for an existing SKU by ASIN; creates a new one if not found.
+    Errors are swallowed — SKU attachment failure should not block the caller.
     """
-    referer = f"/warehouse/inbound/{inbound_uuid}"
+    referer = f"/warehouse/inbound/{shipment_uuid}"
 
-    # ── Step A: search by ASIN ────────────────────────────────────────────────
-    snap_a, effects_a = _livewire_update(
+    r = session.get(
+        BASE_URL + referer,
+        headers={**_HEADERS, "accept": "text/html,*/*"},
+        timeout=15,
+    )
+    if r.status_code != 200:
+        return
+
+    html = r.text
+    update_uri = _extract_update_uri(html)
+    csrf_token = _extract_csrf(html)
+    snapshot = _extract_component_snapshot(html, "warehouse.inbound.form")
+    if snapshot is None:
+        return
+
+    # ── Search for existing SKU by ASIN ──────────────────────────────────────
+    snap_search, effects_search = _livewire_update(
         session, update_uri, csrf_token, snapshot,
         updates={"sku_search": asin},
         calls=[{"method": "$commit", "params": [], "metadata": {"type": "model.live"}}],
         referer=referer,
     )
 
-    data_a = snap_a.get("data", {})
+    data_search = snap_search.get("data", {})
 
-    # Check if a single match was auto-selected
-    if data_a.get("sku_id"):
-        return data_a["sku_id"], snap_a
+    # Auto-selected by server (single exact match)
+    if data_search.get("sku_id"):
+        return
 
-    # Parse response HTML from effects for SKU UUIDs in dropdown items.
-    # Livewire renders the dropdown as HTML patch; UUIDs appear in wire:click or data attrs.
-    html_patch = effects_a.get("html", "")
+    # Parse Livewire HTML patch for SKU UUIDs in the dropdown
     excluded = {
-        prime_prep_client_id,
-        inbound_uuid,
-        os.getenv("PRIME_PREP_WAREHOUSE_ID", ""),
+        prime_prep_client_id.lower(),
+        shipment_uuid.lower(),
+        os.getenv("PRIME_PREP_WAREHOUSE_ID", "").lower(),
     }
+    html_patch = effects_search.get("html", "")
     found_uuids = [u for u in _UUID_RE.findall(html_patch) if u.lower() not in excluded]
 
     if found_uuids:
-        # First UUID in the dropdown is the best match for the searched ASIN
-        sku_id = found_uuids[0]
-        snap_select, _ = _livewire_update(
-            session, update_uri, csrf_token, snap_a,
-            updates={"sku_id": sku_id},
+        # Select the first matching SKU
+        _livewire_update(
+            session, update_uri, csrf_token, snap_search,
+            updates={"sku_id": found_uuids[0]},
             calls=[{"method": "$commit", "params": [], "metadata": {"type": "model.live"}}],
             referer=referer,
         )
-        return sku_id, snap_select
+        return
 
-    # ── Step B: SKU not found — create it ────────────────────────────────────
-    # Open the quick-SKU modal, fill ASIN + title, then save.
-    snap_b, _ = _livewire_update(
-        session, update_uri, csrf_token, snap_a,
+    # ── SKU not found — create a new one ─────────────────────────────────────
+    _livewire_update(
+        session, update_uri, csrf_token, snap_search,
         updates={
             "showQuickSkuModal": True,
             "quickSkuClientId": prime_prep_client_id,
@@ -219,15 +229,11 @@ def _find_or_create_sku(
         referer=referer,
     )
 
-    sku_id = snap_b.get("data", {}).get("sku_id")
-    return sku_id, snap_b
 
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def login() -> requests.Session:
-    """
-    Authenticate with prime-prep.com and return an authenticated session.
-    Raises PrimePrepError on failure.
-    """
+    """Authenticate and return an authenticated session. Raises PrimePrepError on failure."""
     email, password = _get_credentials()
     session = requests.Session()
 
@@ -256,18 +262,16 @@ def login() -> requests.Session:
     if snapshot.get("memo", {}).get("name") != "auth.login":
         raise PrimePrepError("First wire:snapshot is not auth.login — page structure changed")
 
-    payload = {
-        "_token": csrf_token,
-        "components": [{
-            "snapshot": json.dumps(snapshot),
-            "updates": {"email": email, "password": password, "remember": True},
-            "calls": [{"method": "login", "params": [], "metadata": {}}],
-        }],
-    }
-
     r2 = session.post(
         update_uri,
-        json=payload,
+        json={
+            "_token": csrf_token,
+            "components": [{
+                "snapshot": json.dumps(snapshot),
+                "updates": {"email": email, "password": password, "remember": True},
+                "calls": [{"method": "login", "params": [], "metadata": {}}],
+            }],
+        },
         headers={
             **_HEADERS,
             "accept": "*/*",
@@ -316,9 +320,8 @@ def register_inbound(
     Register an expected inbound shipment with prime-prep.
     Returns the shipment UUID assigned by prime-prep.
 
-    SKU flow: search for existing SKU by ASIN; create a new one if not found.
-    The title for new SKU creation is taken from the `title` argument
-    (should be the Keepa-fetched product title stored on the parcel).
+    Phase 1 creates the inbound record (no SKU yet).
+    Phase 2 attaches the SKU on the edit page (errors silently skipped).
     """
     warehouse_id = os.getenv("PRIME_PREP_WAREHOUSE_ID", "")
     if not warehouse_id:
@@ -329,7 +332,7 @@ def register_inbound(
     if arrival_date is None:
         arrival_date = date.today().isoformat()
 
-    # ── Step 1: GET the new inbound form ─────────────────────────────────────
+    # ── Phase 1, step 1: GET new inbound form ─────────────────────────────────
     r = session.get(
         BASE_URL + "/warehouse/inbound/new",
         headers={**_HEADERS, "accept": "text/html,*/*"},
@@ -346,62 +349,52 @@ def register_inbound(
     if snapshot is None:
         raise PrimePrepError("warehouse.inbound.form component not found — page structure changed")
 
-    # ── Step 2: Set client_id → server creates the draft inbound ─────────────
+    # ── Phase 1, step 2: Set client_id → server creates draft ────────────────
     snap1, _ = _livewire_update(
         session, update_uri, csrf_token, snapshot,
         updates={"client_id": prime_prep_client_id},
         calls=[],
     )
 
-    # Extract the inbound UUID from the draft model in snapshot
-    inbound_field = snap1.get("data", {}).get("inbound")
-    inbound_uuid: Optional[str] = None
-    if isinstance(inbound_field, list) and len(inbound_field) > 1:
-        inbound_model = inbound_field[1]
-        if isinstance(inbound_model, dict):
-            inbound_uuid = inbound_model.get("key")
-
-    # ── Step 3: Resolve SKU (find existing or create new) ────────────────────
-    sku_id: Optional[str] = None
-    current_snap = snap1
-
-    if asin:
-        sku_id, current_snap = _find_or_create_sku(
-            session, update_uri, csrf_token, snap1,
-            inbound_uuid=inbound_uuid or "",
-            prime_prep_client_id=prime_prep_client_id,
-            asin=asin,
-            title=title,
-        )
-
-    # ── Step 4: Fill remaining fields + finalize ──────────────────────────────
-    updates_final: dict = {
-        "warehouse_id": warehouse_id,
-        "reference_number": tracking_number,
-        "order_number": order_number,
-        "carrier_type": _detect_carrier(tracking_number),
-        "arrival_date": arrival_date,
-        "expected_qty": qty,
-    }
-    if sku_id:
-        updates_final["sku_id"] = sku_id
-
+    # ── Phase 1, step 3: Fill remaining fields + finalize ─────────────────────
     snap_final, effects = _livewire_update(
-        session, update_uri, csrf_token, current_snap,
-        updates=updates_final,
+        session, update_uri, csrf_token, snap1,
+        updates={
+            "warehouse_id": warehouse_id,
+            "reference_number": tracking_number,
+            "order_number": order_number,
+            "carrier_type": _detect_carrier(tracking_number),
+            "arrival_date": arrival_date,
+            "expected_qty": qty,
+        },
         calls=[{"method": "finalize", "params": [], "metadata": {}}],
     )
 
-    # Prefer UUID from redirect URL (most reliable)
-    shipment_uuid: Optional[str] = inbound_uuid
+    # Extract shipment UUID from redirect URL (primary source)
+    shipment_uuid: Optional[str] = None
     redirect = effects.get("redirect", "")
     if redirect:
         m = re.search(r"/inbound/([0-9a-f-]{36})", redirect)
         if m:
             shipment_uuid = m.group(1)
 
+    # Fallback: inbound model key from draft snapshot (set during step 2)
+    if not shipment_uuid:
+        inbound_field = snap1.get("data", {}).get("inbound")
+        if isinstance(inbound_field, list) and len(inbound_field) > 1:
+            inbound_model = inbound_field[1]
+            if isinstance(inbound_model, dict):
+                shipment_uuid = inbound_model.get("key")
+
     if not shipment_uuid:
         raise PrimePrepError("Could not extract shipment UUID from prime-prep response")
+
+    # ── Phase 2: attach SKU on the edit page ─────────────────────────────────
+    if asin:
+        try:
+            _attach_sku(session, shipment_uuid, prime_prep_client_id, asin, title)
+        except Exception:
+            pass  # SKU failure never blocks the registration result
 
     return shipment_uuid
 
