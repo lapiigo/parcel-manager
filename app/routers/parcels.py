@@ -775,7 +775,7 @@ def parcel_register_prep(
     if error_msg:
         params = f"?prep_error={urllib.parse.quote(error_msg)}"
     elif sku_warning:
-        params = f"?prep_error={urllib.parse.quote('SKU not attached: ' + sku_warning)}"
+        params = f"?prep_error={urllib.parse.quote('SKU: ' + sku_warning)}"
     else:
         params = ""
     return RedirectResponse(f"/parcels/{parcel_id}{params}", status_code=302)

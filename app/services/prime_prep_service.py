@@ -198,7 +198,7 @@ def _attach_sku(
 
     # Auto-selected by server (single exact match)
     if data_search.get("sku_id"):
-        return ""
+        return f"[auto-selected] sku_id={data_search['sku_id']}"
 
     # Parse Livewire HTML patch for SKU UUIDs in the dropdown
     excluded = {
@@ -210,13 +210,14 @@ def _attach_sku(
     found_uuids = [u for u in _UUID_RE.findall(html_patch) if u.lower() not in excluded]
 
     if found_uuids:
-        _livewire_update(
+        snap_sel, _ = _livewire_update(
             session, update_uri, csrf_token, snap_search,
             updates={"sku_id": found_uuids[0]},
             calls=[{"method": "$commit", "params": [], "metadata": {"type": "model.live"}}],
             referer=referer,
         )
-        return ""
+        sku_after = snap_sel.get("data", {}).get("sku_id")
+        return f"[selected-from-html] uuid={found_uuids[0]} sku_id_after={sku_after}"
 
     # ── SKU not found — create a new one ─────────────────────────────────────
     snap_create, _ = _livewire_update(
@@ -232,16 +233,11 @@ def _attach_sku(
     )
 
     sku_id_after = snap_create.get("data", {}).get("sku_id")
-    if sku_id_after:
-        return ""
-
     errors = snap_create.get("memo", {}).get("errors", [])
-    html_patch_after = effects_search.get("html", "")
     return (
-        f"saveQuickSku did not set sku_id. "
-        f"errors={errors}, "
-        f"html_patch_len={len(html_patch)}, "
-        f"found_uuids_before_create={found_uuids}"
+        f"[saveQuickSku] sku_id_after={sku_id_after} "
+        f"errors={errors} "
+        f"html_patch_len={len(html_patch)}"
     )
 
 
