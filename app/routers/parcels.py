@@ -747,6 +747,7 @@ def parcel_register_prep(
             qty=parcel.qty or 1,
             prime_prep_client_id=prime_prep_client_id or "",
             order_number=parcel.external_order_id or "",
+            title=parcel.title or "",
         )
         parcel.prime_prep_shipment_id = shipment_id
         parcel.prime_prep_status = "registered"
