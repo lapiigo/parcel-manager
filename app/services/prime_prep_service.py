@@ -211,21 +211,22 @@ def _attach_sku(
 
     if found_uuids:
         sku_id = found_uuids[0]
-        # Set sku_id then finalize to persist it in the database
-        snap_sel, _ = _livewire_update(
+        # Send sku_id update and finalize in a single request (mirrors browser behaviour)
+        snap_fin, eff_fin = _livewire_update(
             session, update_uri, csrf_token, snap_search,
             updates={"sku_id": sku_id},
-            calls=[],
-            referer=referer,
-        )
-        snap_fin, _ = _livewire_update(
-            session, update_uri, csrf_token, snap_sel,
-            updates={},
             calls=[{"method": "finalize", "params": [], "metadata": {}}],
             referer=referer,
         )
         sku_after = snap_fin.get("data", {}).get("sku_id")
-        return f"[selected+finalized] uuid={sku_id} sku_id_after={sku_after}"
+        fin_redirect = eff_fin.get("redirect") or eff_fin.get("path") or eff_fin.get("url") or ""
+        fin_errors = snap_fin.get("memo", {}).get("errors", [])
+        all_uuids_in_patch = _UUID_RE.findall(html_patch)
+        return (
+            f"[select+finalize-combined] uuid={sku_id} sku_after={sku_after} "
+            f"redirect={fin_redirect!r} errors={fin_errors} "
+            f"patch_uuids={all_uuids_in_patch[:5]}"
+        )
 
     # ── SKU not found — create a new one, then finalize to persist ────────────
     snap_create, _ = _livewire_update(
@@ -244,13 +245,15 @@ def _attach_sku(
     errors = snap_create.get("memo", {}).get("errors", [])
 
     if sku_id_after:
-        snap_fin2, _ = _livewire_update(
+        snap_fin2, eff_fin2 = _livewire_update(
             session, update_uri, csrf_token, snap_create,
             updates={},
             calls=[{"method": "finalize", "params": [], "metadata": {}}],
             referer=referer,
         )
-        return f"[created+finalized] sku_id={sku_id_after}"
+        fin2_redirect = eff_fin2.get("redirect") or eff_fin2.get("path") or ""
+        sku_after2 = snap_fin2.get("data", {}).get("sku_id")
+        return f"[created+finalized] sku_id={sku_id_after} sku_after={sku_after2} redirect={fin2_redirect!r}"
 
     return (
         f"[saveQuickSku-no-id] errors={errors} "
