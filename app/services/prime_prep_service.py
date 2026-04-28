@@ -154,28 +154,26 @@ def _detect_carrier(tracking: str) -> str:
     return "other"
 
 
-def _find_sku_uuid_for_asin(html: str, asin: str) -> tuple[Optional[str], str]:
+def _find_sku_uuid_for_asin(
+    html: str,
+    asin: str,
+    excluded: frozenset[str] = frozenset(),
+) -> tuple[Optional[str], str]:
     """
     Parse page HTML for the SKU UUID matching the given ASIN.
     Returns (uuid_or_None, debug_hint).
-
-    Strategies (in order):
-    1. JSON key "asin":"ASIN" adjacent to "id":"UUID" — Alpine x-data / script blocks
-    2. Livewire child-component snapshot data containing the ASIN
-    3. Plain ASIN text near sku_id= pattern — server-rendered Blade dropdown
     """
     asin_esc = re.escape(asin)
 
-    # Strategy 1: JSON context — "asin":"VALUE" near a UUID
+    # Strategy 1: JSON key "asin":"VALUE" near a UUID (Alpine x-data / script blocks)
     for m in re.finditer(r'"asin"\s*:\s*"' + asin_esc + r'"', html, re.I):
         start = max(0, m.start() - 600)
         end = min(len(html), m.end() + 600)
-        window = html[start:end]
-        uuids = _UUID_RE.findall(window)
-        if uuids:
-            return uuids[0], "json-asin-key"
+        for u in _UUID_RE.findall(html[start:end]):
+            if u.lower() not in excluded:
+                return u, "json-asin-key"
 
-    # Strategy 2: Livewire child-component snapshots that contain the ASIN
+    # Strategy 2: Livewire child-component snapshot data containing the ASIN
     for snap_m in re.finditer(r'wire:snapshot="((?:[^"\\]|\\.)*)"', html):
         raw = snap_m.group(1).replace("&quot;", '"').replace("&amp;", "&")
         try:
@@ -188,28 +186,46 @@ def _find_sku_uuid_for_asin(html: str, asin: str) -> tuple[Optional[str], str]:
         for m2 in re.finditer(r'"asin"\s*:\s*"' + asin_esc + r'"', data_str, re.I):
             s = max(0, m2.start() - 600)
             e = min(len(data_str), m2.end() + 600)
-            uuids = _UUID_RE.findall(data_str[s:e])
-            if uuids:
-                return uuids[0], "child-snapshot"
+            for u in _UUID_RE.findall(data_str[s:e]):
+                if u.lower() not in excluded:
+                    return u, "child-snapshot"
 
-    # Strategy 3: plain ASIN near sku_id= (server-rendered Blade HTML)
+    # Strategy 3: ASIN as display text in Blade-rendered dropdown
+    # The element's click handler / wire:key usually precedes the ASIN text.
+    # Use a wide window and try several patterns before falling back to any UUID.
     for m in re.finditer(asin_esc, html, re.I):
-        start = max(0, m.start() - 800)
+        start = max(0, m.start() - 2000)
         end = min(len(html), m.end() + 200)
         window = html[start:end]
+
+        # Pattern a: $wire.set('sku_id', 'UUID') or $wire.set("sku_id", "UUID")
         m2 = re.search(
-            r"""(?:sku[_-]id|set\s*\(\s*['"]sku_id)[^'"]{0,20}'"""
-            r"""([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})""",
+            r"""set\s*\(\s*['"]sku_id['"]\s*,\s*['"]"""
+            r"""([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})['"]""",
             window, re.I,
         )
-        if m2:
-            return m2.group(1), "blade-near-asin"
+        if m2 and m2.group(1).lower() not in excluded:
+            return m2.group(1), "wire-set-sku_id"
 
-    # Not found — return a small context snippet for debugging
+        # Pattern b: wire:key="...-UUID" or wire:key="UUID"
+        for km in re.finditer(
+            r"""wire:key=['"](?:[^'"]*-)?"""
+            r"""([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})['"]""",
+            window, re.I,
+        ):
+            if km.group(1).lower() not in excluded:
+                return km.group(1), "wire-key"
+
+        # Pattern c: any UUID not in excluded set (last resort for this occurrence)
+        for u in _UUID_RE.findall(window):
+            if u.lower() not in excluded:
+                return u, "uuid-near-asin"
+
+    # Not found — return a context snippet for debugging
     first_pos = html.lower().find(asin.lower())
     if first_pos >= 0:
         snippet = html[max(0, first_pos - 100): first_pos + 200].replace("\n", " ")
-        return None, f"asin-found-but-no-uuid snippet={snippet[:120]!r}"
+        return None, f"asin-in-html-no-uuid snippet={snippet[:150]!r}"
     return None, "asin-not-in-html"
 
 
@@ -244,7 +260,14 @@ def _attach_sku(
         return f"warehouse.inbound.form not found; components: {names[:5]}"
 
     # ── Try to find existing SKU UUID in the page HTML ────────────────────────
-    sku_uuid, find_hint = _find_sku_uuid_for_asin(html, asin)
+    snap_data = snapshot.get("data", {})
+    excluded = frozenset(filter(None, [
+        prime_prep_client_id.lower(),
+        shipment_uuid.lower(),
+        os.getenv("PRIME_PREP_WAREHOUSE_ID", "").lower(),
+        str(snap_data.get("lockToken", "")).lower(),
+    ]))
+    sku_uuid, find_hint = _find_sku_uuid_for_asin(html, asin, excluded)
 
     if sku_uuid:
         # Exact browser flow: set sku_id + $commit(model.live), then addItem
