@@ -43,10 +43,10 @@
 </div>
 {% endif %}
 
-{% if prep_error %}
+{% if parcel.prime_prep_status and parcel.prime_prep_status.startswith('error:') %}
 <div class="mb-4 px-4 py-3 rounded-lg text-sm flex items-start gap-2 bg-red-50 border border-red-200 text-red-700">
   <span class="font-semibold">✗</span>
-  <span>Prime Prep: {{ prep_error }}</span>
+  <span>Prime Prep: {{ parcel.prime_prep_status[6:] }}</span>
 </div>
 {% endif %}
 
@@ -139,9 +139,11 @@
         <div class="col-span-2 border-t border-gray-50 pt-3">
           <dt class="text-gray-400 mb-1">Prime Prep</dt>
           <dd class="flex items-center gap-3 flex-wrap">
-            {% if parcel.prime_prep_shipment_id %}
+            {% if parcel.prime_prep_status == 'registering…' %}
+            <span class="text-xs text-blue-600 font-medium animate-pulse">Registering… reload in a moment</span>
+            {% elif parcel.prime_prep_shipment_id %}
             <span class="font-mono text-xs text-gray-600 bg-gray-100 px-2 py-0.5 rounded">{{ parcel.prime_prep_shipment_id }}</span>
-            {% if parcel.prime_prep_status %}
+            {% if parcel.prime_prep_status and not parcel.prime_prep_status.startswith('error:') %}
             <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-indigo-100 text-indigo-700">{{ parcel.prime_prep_status }}</span>
             {% endif %}
             {% if can(current_user, 'edit_parcel') %}

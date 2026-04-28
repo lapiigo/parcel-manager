@@ -1,7 +1,7 @@
 import os
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, Request, Form, UploadFile, File, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Form, UploadFile, File, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -400,7 +400,6 @@ def parcel_detail(
     request: Request,
     parcel_id: int,
     cost_msg: str = Query(""),
-    prep_error: str = Query(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
@@ -443,7 +442,6 @@ def parcel_detail(
             "VALID_TRANSITIONS": VALID_TRANSITIONS,
             "can": can,
             "cost_flash": cost_flash,
-            "prep_error": prep_error,
         },
     )
 
@@ -716,28 +714,64 @@ def parcel_accept(
     return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
 
+def _bg_register_prep(
+    parcel_id: int,
+    tracking_number: str,
+    asin: Optional[str],
+    qty: int,
+    prime_prep_client_id: str,
+    order_number: str,
+    title: str,
+) -> None:
+    """Background task: register inbound + attach SKU; writes result to DB."""
+    from app.database import SessionLocal
+    from app.services import prime_prep_service
+
+    db = SessionLocal()
+    try:
+        pp_session = prime_prep_service.login()
+        shipment_id, sku_diag = prime_prep_service.register_inbound(
+            pp_session,
+            tracking_number=tracking_number,
+            asin=asin,
+            qty=qty,
+            prime_prep_client_id=prime_prep_client_id,
+            order_number=order_number,
+            title=title,
+        )
+        parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
+        if parcel:
+            parcel.prime_prep_shipment_id = shipment_id
+            parcel.prime_prep_status = f"registered | SKU: {sku_diag}" if sku_diag else "registered"
+            db.commit()
+    except Exception as exc:
+        parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
+        if parcel:
+            parcel.prime_prep_status = f"error: {str(exc)[:200]}"
+            db.commit()
+    finally:
+        db.close()
+
+
 @router.post("/{parcel_id}/register-prep")
 def parcel_register_prep(
     request: Request,
     parcel_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
     if not can(current_user, "edit_parcel"):
         return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
     parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
-    if not parcel:
-        return RedirectResponse("/parcels", status_code=302)
-
-    if not parcel.client_id:
+    if not parcel or not parcel.client_id:
         return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
-    from app.services import prime_prep_service
     from app.models.client import Client
     client = db.query(Client).filter(Client.id == parcel.client_id).first()
-    prime_prep_client_id = client.prime_prep_client_id if client else None
+    prime_prep_client_id = (client.prime_prep_client_id if client else None) or ""
 
-    # Fetch title from Keepa if not yet stored (needed for SKU creation)
+    # Fetch title from Keepa now (fast, 1 token) so the background task has it
     title = parcel.title or ""
     if not title and parcel.asin:
         try:
@@ -750,41 +784,46 @@ def parcel_register_prep(
         except Exception:
             pass
 
-    error_msg = ""
-    sku_warning = ""
+    # Mark as pending immediately so the UI shows progress
+    parcel.prime_prep_status = "registering…"
+    db.commit()
+
+    background_tasks.add_task(
+        _bg_register_prep,
+        parcel_id=parcel_id,
+        tracking_number=parcel.tracking_number,
+        asin=parcel.asin,
+        qty=parcel.qty or 1,
+        prime_prep_client_id=prime_prep_client_id,
+        order_number=parcel.external_order_id or "",
+        title=title,
+    )
+    return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+
+def _bg_fetch_prep_status(parcel_id: int, shipment_id: str) -> None:
+    from app.database import SessionLocal
+    from app.services import prime_prep_service
+
+    db = SessionLocal()
     try:
         pp_session = prime_prep_service.login()
-        shipment_id, sku_warning = prime_prep_service.register_inbound(
-            pp_session,
-            tracking_number=parcel.tracking_number,
-            asin=parcel.asin,
-            qty=parcel.qty or 1,
-            prime_prep_client_id=prime_prep_client_id or "",
-            order_number=parcel.external_order_id or "",
-            title=title,
-        )
-        parcel.prime_prep_shipment_id = shipment_id
-        parcel.prime_prep_status = "registered"
-        db.commit()
-    except prime_prep_service.PrimePrepError as exc:
-        error_msg = str(exc)
-    except Exception as exc:
-        error_msg = str(exc)
-
-    import urllib.parse
-    if error_msg:
-        params = f"?prep_error={urllib.parse.quote(error_msg)}"
-    elif sku_warning:
-        params = f"?prep_error={urllib.parse.quote('SKU: ' + sku_warning)}"
-    else:
-        params = ""
-    return RedirectResponse(f"/parcels/{parcel_id}{params}", status_code=302)
+        info = prime_prep_service.get_shipment_status(pp_session, shipment_id)
+        parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
+        if parcel:
+            parcel.prime_prep_status = info.get("status") or parcel.prime_prep_status
+            db.commit()
+    except Exception:
+        pass
+    finally:
+        db.close()
 
 
 @router.post("/{parcel_id}/fetch-prep-status")
 def parcel_fetch_prep_status(
     request: Request,
     parcel_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
@@ -794,16 +833,7 @@ def parcel_fetch_prep_status(
     if not parcel or not parcel.prime_prep_shipment_id:
         return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
-    from app.services import prime_prep_service
-    try:
-        session = prime_prep_service.login()
-        info = prime_prep_service.get_shipment_status(session, parcel.prime_prep_shipment_id)
-        parcel.prime_prep_status = info.get("status", parcel.prime_prep_status)
-        db.commit()
-    except NotImplementedError:
-        pass
-    except Exception:
-        pass
+    background_tasks.add_task(_bg_fetch_prep_status, parcel_id, parcel.prime_prep_shipment_id)
     return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
 
