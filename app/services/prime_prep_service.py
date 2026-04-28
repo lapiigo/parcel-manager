@@ -154,6 +154,35 @@ def _detect_carrier(tracking: str) -> str:
     return "other"
 
 
+def _find_sku_uuid_for_asin(html: str, asin: str) -> Optional[str]:
+    """
+    Parse page HTML for the SKU UUID matching the given ASIN.
+    The SKU dropdown is rendered server-side; Alpine.js filters it client-side.
+    We look for a UUID that appears in the same HTML block as the ASIN text.
+    """
+    for m in re.finditer(re.escape(asin), html, re.I):
+        # Search window: 800 chars before and 200 after — UUID usually precedes ASIN in HTML
+        start = max(0, m.start() - 800)
+        end = min(len(html), m.end() + 200)
+        window = html[start:end]
+
+        # Prefer UUID that appears in a sku_id / $wire.set('sku_id', ...) context
+        m2 = re.search(
+            r"""(?:sku[_-]id|set\s*\(\s*['"]sku_id)"""
+            r"""[^'"]{0,20}['"]([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})""",
+            window, re.I,
+        )
+        if m2:
+            return m2.group(1)
+
+        # Fallback: any UUID in the window
+        uuids = _UUID_RE.findall(window)
+        if uuids:
+            return uuids[0]
+
+    return None
+
+
 def _attach_sku(
     session: requests.Session,
     shipment_uuid: str,
@@ -164,7 +193,7 @@ def _attach_sku(
 ) -> str:
     """
     Phase 2: open the edit page and attach a SKU to an existing inbound.
-    Returns empty string on success, or an error/diagnostic string on failure.
+    Returns a diagnostic string describing what happened.
     """
     referer = f"/warehouse/inbound/{shipment_uuid}"
 
@@ -181,51 +210,34 @@ def _attach_sku(
     csrf_token = _extract_csrf(html)
     snapshot = _extract_component_snapshot(html, "warehouse.inbound.form")
     if snapshot is None:
-        # List all component names found to help diagnose
-        names = []
-        for m in re.finditer(r'"name"\s*:\s*"([^"]+)"', html):
-            names.append(m.group(1))
-        return f"warehouse.inbound.form not found on edit page; components: {names[:5]}"
+        names = [m.group(1) for m in re.finditer(r'"name"\s*:\s*"([^"]+)"', html)]
+        return f"warehouse.inbound.form not found; components: {names[:5]}"
 
-    # ── Search for existing SKU by ASIN ──────────────────────────────────────
-    snap_search, effects_search = _livewire_update(
-        session, update_uri, csrf_token, snapshot,
-        updates={"sku_search": asin},
-        calls=[{"method": "$commit", "params": [], "metadata": {"type": "model.live"}}],
-        referer=referer,
-    )
+    # ── Try to find existing SKU UUID in the page HTML ────────────────────────
+    # The dropdown is server-rendered (all SKUs) but filtered client-side by Alpine.
+    # UUID for our ASIN appears adjacent to the ASIN text in the rendered HTML.
+    sku_uuid = _find_sku_uuid_for_asin(html, asin)
 
-    data_search = snap_search.get("data", {})
-
-    # Auto-selected by server (single exact match)
-    if data_search.get("sku_id"):
-        return f"[auto-selected] sku_id={data_search['sku_id']}"
-
-    # Parse Livewire HTML patch for SKU UUIDs in the dropdown
-    excluded = {
-        prime_prep_client_id.lower(),
-        shipment_uuid.lower(),
-        os.getenv("PRIME_PREP_WAREHOUSE_ID", "").lower(),
-    }
-    html_patch = effects_search.get("html", "")
-    found_uuids = [u for u in _UUID_RE.findall(html_patch) if u.lower() not in excluded]
-
-    if found_uuids:
-        sku_id = found_uuids[0]
-        # Set sku_id + expected_qty then call addItem — mirrors exactly what the browser does
-        snap_add, eff_add = _livewire_update(
-            session, update_uri, csrf_token, snap_search,
-            updates={"sku_id": sku_id, "expected_qty": qty},
+    if sku_uuid:
+        # Exact browser flow: set sku_id + $commit(model.live), then addItem
+        snap_sel, _ = _livewire_update(
+            session, update_uri, csrf_token, snapshot,
+            updates={"sku_id": sku_uuid},
+            calls=[{"method": "$commit", "params": [], "metadata": {"type": "model.live"}}],
+            referer=referer,
+        )
+        snap_add, _ = _livewire_update(
+            session, update_uri, csrf_token, snap_sel,
+            updates={"expected_qty": qty},
             calls=[{"method": "addItem", "params": [], "metadata": {}}],
             referer=referer,
         )
-        sku_after = snap_add.get("data", {}).get("sku_id")
-        add_errors = snap_add.get("memo", {}).get("errors", [])
-        return f"[selected+addItem] uuid={sku_id} sku_after={sku_after} errors={add_errors}"
+        errors = snap_add.get("memo", {}).get("errors", [])
+        return f"[selected+addItem] sku={sku_uuid} errors={errors}"
 
-    # ── SKU not found — create a new one via saveQuickSku, then addItem ──────
+    # ── SKU not found in HTML → create via saveQuickSku, then addItem ─────────
     snap_create, _ = _livewire_update(
-        session, update_uri, csrf_token, snap_search,
+        session, update_uri, csrf_token, snapshot,
         updates={
             "showQuickSkuModal": True,
             "quickSkuClientId": prime_prep_client_id,
@@ -249,10 +261,7 @@ def _attach_sku(
         add2_errors = snap_add2.get("memo", {}).get("errors", [])
         return f"[created+addItem] sku_id={sku_id_after} errors={add2_errors}"
 
-    return (
-        f"[saveQuickSku-no-id] errors={errors} "
-        f"html_patch_len={len(html_patch)}"
-    )
+    return f"[saveQuickSku-no-id] errors={errors}"
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
