@@ -43,6 +43,7 @@ class Parcel(Base):
     photos = relationship("ParcelPhoto", back_populates="parcel", cascade="all, delete-orphan")
     comments = relationship("ParcelComment", back_populates="parcel", cascade="all, delete-orphan", order_by="ParcelComment.created_at")
     status_logs = relationship("ParcelStatusLog", back_populates="parcel", cascade="all, delete-orphan", order_by="ParcelStatusLog.changed_at.desc()")
+    activity_logs = relationship("ParcelLog", back_populates="parcel", cascade="all, delete-orphan", order_by="ParcelLog.created_at.asc()")
     orders = relationship("Order", back_populates="parcel")
 
 
@@ -82,3 +83,17 @@ class ParcelStatusLog(Base):
     notes = Column(Text, nullable=True)
 
     parcel = relationship("Parcel", back_populates="status_logs")
+
+
+class ParcelLog(Base):
+    __tablename__ = "parcel_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    parcel_id = Column(Integer, ForeignKey("parcels.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(Integer, nullable=True)
+    user_name = Column(String(100), nullable=True)
+    action = Column(String(50), nullable=False)
+    detail = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    parcel = relationship("Parcel", back_populates="activity_logs")

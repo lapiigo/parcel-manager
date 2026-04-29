@@ -9,7 +9,7 @@ from typing import Optional
 
 from app.database import get_db
 from app.auth import require_manager_up, get_current_user
-from app.models.parcel import Parcel, ParcelPhoto, ParcelComment
+from app.models.parcel import Parcel, ParcelPhoto, ParcelComment, ParcelLog
 from app.models.supplier import Supplier
 from app.models.client import Client
 from app.services.parcel_service import transition_parcel, STATUS_LABELS, STATUS_COLORS, VALID_TRANSITIONS
@@ -17,6 +17,17 @@ from app.permissions import can
 from app.services import keepa_service
 
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "uploads")
+
+
+def _log(db, parcel_id: int, action: str, detail: str = None, user=None) -> None:
+    """Append one entry to the parcel activity log."""
+    db.add(ParcelLog(
+        parcel_id=parcel_id,
+        user_id=getattr(user, "id", None),
+        user_name=(user.full_name or user.username) if user else "system",
+        action=action,
+        detail=detail,
+    ))
 
 router = APIRouter(prefix="/parcels")
 templates = Jinja2Templates(directory="app/templates")
@@ -392,6 +403,10 @@ async def parcel_create(
     db.add(parcel)
     db.commit()
     db.refresh(parcel)
+    _log(db, parcel.id, "created",
+         f"Tracking: {parcel.tracking_number}" + (f" | Order: {parcel.external_order_id}" if parcel.external_order_id else ""),
+         user=current_user)
+    db.commit()
     return RedirectResponse(f"/parcels/{parcel.id}", status_code=302)
 
 
@@ -428,6 +443,14 @@ def parcel_detail(
         parts = cost_msg.split(":", 1)
         cost_flash = {"type": parts[0], "text": parts[1] if len(parts) > 1 else ""}
 
+    activity_logs = (
+        db.query(ParcelLog)
+        .filter(ParcelLog.parcel_id == parcel_id)
+        .order_by(ParcelLog.created_at.asc())
+        .all()
+        if current_user.role in ("admin", "super_admin") else []
+    )
+
     return templates.TemplateResponse(
         request,
         "parcels/detail.html",
@@ -442,6 +465,7 @@ def parcel_detail(
             "VALID_TRANSITIONS": VALID_TRANSITIONS,
             "can": can,
             "cost_flash": cost_flash,
+            "activity_logs": activity_logs,
         },
     )
 
@@ -493,14 +517,39 @@ async def parcel_edit(
     parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
     if not parcel or not _check_parcel_access(parcel, current_user):
         return RedirectResponse("/parcels", status_code=302)
+
+    # Capture diff before applying changes
+    changes = []
+    new_tracking = tracking_number.strip()
+    new_ext = external_order_id.strip() or None
+    new_sup = int(supplier_id) if supplier_id else None
+    new_qty = int(qty) if qty else 1
+    new_asin = asin.strip().upper() or None
+    new_price = float(purchase_price) if purchase_price else None
+    new_notes = notes.strip() or None
+    if parcel.tracking_number != new_tracking:
+        changes.append(f"tracking: {parcel.tracking_number} → {new_tracking}")
+    if parcel.external_order_id != new_ext:
+        changes.append(f"order_id: {parcel.external_order_id} → {new_ext}")
+    if parcel.supplier_id != new_sup:
+        changes.append(f"supplier_id: {parcel.supplier_id} → {new_sup}")
+    if parcel.qty != new_qty:
+        changes.append(f"qty: {parcel.qty} → {new_qty}")
+    if parcel.asin != new_asin:
+        changes.append(f"ASIN: {parcel.asin} → {new_asin}")
+    if parcel.purchase_price != new_price:
+        changes.append(f"price: {parcel.purchase_price} → {new_price}")
+    if parcel.notes != new_notes:
+        changes.append("notes updated")
+
     if current_user.role == "super_admin":
         parcel.client_id = int(client_id) if client_id else None
-    parcel.external_order_id = external_order_id.strip() or None
-    parcel.tracking_number = tracking_number.strip()
-    parcel.supplier_id = int(supplier_id) if supplier_id else None
-    parcel.qty = int(qty) if qty else 1
-    parcel.asin = asin.strip().upper() or None
-    parcel.purchase_price = float(purchase_price) if purchase_price else None
+    parcel.external_order_id = new_ext
+    parcel.tracking_number = new_tracking
+    parcel.supplier_id = new_sup
+    parcel.qty = new_qty
+    parcel.asin = new_asin
+    parcel.purchase_price = new_price
     if arrived_at:
         try:
             parcel.arrived_at = datetime.strptime(arrived_at, "%Y-%m-%dT%H:%M")
@@ -508,8 +557,11 @@ async def parcel_edit(
             pass
     else:
         parcel.arrived_at = None
-    parcel.notes = notes.strip() or None
+    parcel.notes = new_notes
     parcel.updated_at = datetime.utcnow()
+
+    if changes:
+        _log(db, parcel_id, "edited", " | ".join(changes), user=current_user)
     db.commit()
     return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
@@ -525,11 +577,17 @@ def parcel_status_change(
 ):
     parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
     if parcel and _check_parcel_access(parcel, current_user):
+        old_status = parcel.status
         transition_parcel(
             parcel, new_status, db,
             changed_by=current_user.full_name or current_user.username,
             notes=status_notes,
         )
+        _log(db, parcel_id, "status_changed",
+             f"{STATUS_LABELS.get(old_status, old_status)} → {STATUS_LABELS.get(new_status, new_status)}"
+             + (f" | {status_notes}" if status_notes else ""),
+             user=current_user)
+        db.commit()
     return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
 
@@ -547,6 +605,7 @@ def parcel_add_comment(
         author=current_user.full_name or current_user.username,
     )
     db.add(comment)
+    _log(db, parcel_id, "comment_added", body.strip()[:120], user=current_user)
     db.commit()
     return RedirectResponse(f"/parcels/{parcel_id}#comments", status_code=302)
 
@@ -579,6 +638,7 @@ async def parcel_upload_photo(
         caption=caption.strip() or None,
     )
     db.add(photo)
+    _log(db, parcel_id, "photo_added", caption.strip() or filename, user=current_user)
     db.commit()
     return RedirectResponse(f"/parcels/{parcel_id}#photos", status_code=302)
 
@@ -636,6 +696,8 @@ def parcel_calculate_cost(
         except keepa_service.KeepaError as exc:
             errors.append(f"Keepa error: {exc}")
 
+    if not errors and info:
+        _log(db, parcel_id, "cost_calculated", info[0], user=current_user)
     db.commit()
     msg_type = "error" if errors else "ok"
     encoded = urllib.parse.quote(" | ".join(errors) if errors else " | ".join(info))
@@ -693,6 +755,7 @@ def parcel_accept(
     if condition == "problem":
         parcel.purchase_price = 0
         parcel.amazon_price = None
+        _log(db, parcel_id, "accepted", "Condition: problem", user=current_user)
         db.commit()
         return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
@@ -710,6 +773,7 @@ def parcel_accept(
     except keepa_service.KeepaError:
         pass  # cost stays None; user can recalculate manually
 
+    _log(db, parcel_id, "accepted", "Condition: ok", user=current_user)
     db.commit()
     return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
@@ -743,11 +807,23 @@ def _bg_register_prep(
         if parcel:
             parcel.prime_prep_shipment_id = shipment_id
             parcel.prime_prep_status = f"registered | SKU: {sku_diag}" if sku_diag else "registered"
+            db.add(ParcelLog(
+                parcel_id=parcel_id,
+                user_name="system",
+                action="prime_prep_registered",
+                detail=f"Shipment: {shipment_id}" + (f" | SKU: {sku_diag}" if sku_diag else ""),
+            ))
             db.commit()
     except Exception as exc:
         parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
         if parcel:
             parcel.prime_prep_status = f"error: {str(exc)[:200]}"
+            db.add(ParcelLog(
+                parcel_id=parcel_id,
+                user_name="system",
+                action="prime_prep_error",
+                detail=str(exc)[:200],
+            ))
             db.commit()
     finally:
         db.close()
@@ -786,6 +862,7 @@ def parcel_register_prep(
 
     # Mark as pending immediately so the UI shows progress
     parcel.prime_prep_status = "registering…"
+    _log(db, parcel_id, "prime_prep_initiated", f"ASIN: {parcel.asin} | qty: {parcel.qty or 1}", user=current_user)
     db.commit()
 
     background_tasks.add_task(
