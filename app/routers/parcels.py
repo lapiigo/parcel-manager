@@ -5,7 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request, Form, UploadFi
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, List
 
 from app.database import get_db
 from app.auth import require_manager_up, get_current_user
@@ -615,7 +615,7 @@ async def parcel_upload_photo(
     request: Request,
     parcel_id: int,
     caption: str = Form(""),
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
@@ -623,22 +623,26 @@ async def parcel_upload_photo(
     if not parcel:
         return RedirectResponse("/parcels", status_code=302)
 
-    ext = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
-    filename = f"{uuid.uuid4()}{ext}"
     save_dir = os.path.join(UPLOAD_DIR, "parcels", str(parcel_id))
     os.makedirs(save_dir, exist_ok=True)
-    save_path = os.path.join(save_dir, filename)
-    content = await file.read()
-    with open(save_path, "wb") as f:
-        f.write(content)
 
-    photo = ParcelPhoto(
-        parcel_id=parcel_id,
-        file_path=f"/uploads/parcels/{parcel_id}/{filename}",
-        caption=caption.strip() or None,
-    )
-    db.add(photo)
-    _log(db, parcel_id, "photo_added", caption.strip() or filename, user=current_user)
+    for file in files:
+        if not file.filename:
+            continue
+        ext = os.path.splitext(file.filename)[1] or ".jpg"
+        filename = f"{uuid.uuid4()}{ext}"
+        save_path = os.path.join(save_dir, filename)
+        content = await file.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+        photo = ParcelPhoto(
+            parcel_id=parcel_id,
+            file_path=f"/uploads/parcels/{parcel_id}/{filename}",
+            caption=caption.strip() or None,
+        )
+        db.add(photo)
+        _log(db, parcel_id, "photo_added", file.filename, user=current_user)
+
     db.commit()
     return RedirectResponse(f"/parcels/{parcel_id}#photos", status_code=302)
 
