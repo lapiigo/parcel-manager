@@ -178,28 +178,25 @@
   </div>
   {% endif %}
 
-  <!-- Individual track rows — each is a full clickable card row -->
+  <!-- Individual track rows — <a> IS the row, @click.stop on interactive children -->
   {% for p in group %}
-  <div class="relative flex items-center gap-3 px-4 py-3 hover:bg-indigo-50/50 transition-colors
-              {% if not loop.last %}border-b border-gray-50{% endif %}"
-       :class="selected.includes({{ p.id }}) ? '!bg-indigo-50' : ''">
+  <a href="/parcels/{{ p.id }}"
+     class="flex items-center gap-3 px-4 py-3 hover:bg-indigo-50/50 transition-colors
+            {% if not loop.last %}border-b border-gray-50{% endif %}"
+     :class="selected.includes({{ p.id }}) ? '!bg-indigo-50' : ''">
 
-    <!-- Checkbox — above the link layer -->
-    <div class="relative z-10 shrink-0">
+    <!-- Checkbox: stop click so the link doesn't fire -->
+    <div @click.stop class="shrink-0">
       <input type="checkbox" :value="{{ p.id }}" x-model="selected"
              class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400 cursor-pointer" />
     </div>
 
-    <!-- Full-row clickable link -->
-    <a href="/parcels/{{ p.id }}" class="absolute inset-0" aria-label="View parcel {{ p.tracking_number }}"></a>
-
     <!-- Content -->
-    <div class="flex-1 min-w-0 relative">
-      <!-- Top line: tracking number + badges -->
+    <div class="flex-1 min-w-0">
+      <!-- Top line: tracking number + status badges -->
       <div class="flex items-center gap-2 flex-wrap">
         <span class="font-mono text-sm font-medium text-gray-800">{{ p.tracking_number }}</span>
         {% if not multi %}
-          {% set statuses_single = [p.status] %}
           <span class="text-xs px-2 py-0.5 rounded-full font-medium {{ STATUS_COLORS.get(p.status, '') }}">
             {{ STATUS_LABELS.get(p.status, p.status) }}
           </span>
@@ -233,8 +230,8 @@
       </div>
     </div>
 
-    <!-- Chevron + delete — above link layer -->
-    <div class="flex items-center gap-3 shrink-0 relative z-10">
+    <!-- Delete + chevron: stop click so the link doesn't fire on delete -->
+    <div @click.stop class="flex items-center gap-2 shrink-0">
       {% if can(current_user, 'delete_parcel') %}
       <form method="post" action="/parcels/{{ p.id }}/delete"
             onsubmit="return confirm('Delete {{ p.tracking_number }}?')">
@@ -249,7 +246,7 @@
       </svg>
     </div>
 
-  </div>
+  </a>
   {% endfor %}
 
 </div>
