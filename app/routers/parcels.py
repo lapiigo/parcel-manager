@@ -661,7 +661,9 @@ def parcel_delete_photo(
             os.remove(photo.file_path.lstrip("/"))
         except Exception:
             pass
+        detail = photo.caption or photo.file_path.rsplit("/", 1)[-1]
         db.delete(photo)
+        _log(db, parcel_id, "photo_deleted", detail, user=current_user)
         db.commit()
     return RedirectResponse(f"/parcels/{parcel_id}#photos", status_code=302)
 
