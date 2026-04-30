@@ -106,6 +106,9 @@ def startup():
         ("parcels", "prime_prep_shipment_id", "VARCHAR(100)"),
         ("parcels", "prime_prep_status", "VARCHAR(50)"),
         ("clients", "prime_prep_client_id", "VARCHAR(36)"),
+        ("parcels", "forwarded_from_id", "INTEGER"),
+        ("parcels", "is_returned", "INTEGER DEFAULT 0"),
+        ("parcels", "returned_at", "DATETIME"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in new_columns:
@@ -114,6 +117,25 @@ def startup():
                 conn.commit()
             except Exception:
                 pass  # Column already exists
+
+        # Migrate legacy status values to new status system
+        try:
+            conn.execute(text(
+                "UPDATE parcels SET status = 'ready_to_pay' "
+                "WHERE status = 'in_warehouse' "
+                "AND (payment_report_date IS NULL OR payment_report_date = '')"
+            ))
+            conn.execute(text(
+                "UPDATE parcels SET status = 'paid' "
+                "WHERE status = 'in_warehouse' "
+                "AND payment_report_date IS NOT NULL AND payment_report_date != ''"
+            ))
+            conn.execute(text(
+                "UPDATE parcels SET status = 'forwarding' WHERE status = 'in_forwarding'"
+            ))
+            conn.commit()
+        except Exception:
+            pass
 
         # Drop UNIQUE constraint on parcels.tracking_number (order_id is the primary key now)
         try:

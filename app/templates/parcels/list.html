@@ -25,13 +25,15 @@
 <div class="bg-white rounded-xl border border-gray-100 shadow-sm">
   <div class="flex border-b border-gray-100 overflow-x-auto">
     {% set tabs = [
-      ("unidentified",  "Unidentified",  "gray"),
-      ("in_transit",    "In Transit",    "yellow"),
-      ("delivered",     "Delivered",     "sky"),
-      ("in_warehouse",  "In Warehouse",  "green"),
-      ("in_forwarding", "Forwarding",    "blue"),
-      ("disposed",      "Disposed",      "red"),
-      ("sold",          "Sold",          "purple"),
+      ("unidentified",       "Unidentified",        "gray"),
+      ("in_transit",         "In Transit",          "yellow"),
+      ("delivered",          "Delivered",           "sky"),
+      ("ready_to_pay",       "Ready to Pay",        "green"),
+      ("paid",               "Paid",                "emerald"),
+      ("forwarding",         "Forwarding",          "blue"),
+      ("return_to_supplier", "Return to Supplier",  "orange"),
+      ("sold",               "Sold",                "purple"),
+      ("ignored",            "Ignored",             "gray"),
     ] %}
     {% for status_key, label, color in tabs %}
     <a href="/parcels?status={{ status_key }}"
@@ -39,13 +41,14 @@
               {% if active_status == status_key %}border-indigo-600 text-indigo-600{% else %}border-transparent text-gray-500 hover:text-gray-700{% endif %}">
       {{ label }}
       <span class="rounded-full px-1.5 py-0.5 font-semibold text-xs
-        {% if color == 'gray' %}bg-gray-100 text-gray-600
-        {% elif color == 'yellow' %}bg-yellow-100 text-yellow-700
+        {% if color == 'yellow' %}bg-yellow-100 text-yellow-700
         {% elif color == 'sky' %}bg-sky-100 text-sky-700
         {% elif color == 'green' %}bg-green-100 text-green-700
+        {% elif color == 'emerald' %}bg-emerald-100 text-emerald-700
         {% elif color == 'blue' %}bg-blue-100 text-blue-700
-        {% elif color == 'red' %}bg-red-100 text-red-700
-        {% else %}bg-purple-100 text-purple-700{% endif %}">
+        {% elif color == 'orange' %}bg-orange-100 text-orange-700
+        {% elif color == 'purple' %}bg-purple-100 text-purple-700
+        {% else %}bg-gray-100 text-gray-500{% endif %}">
         {{ counts.get(status_key, 0) }}
       </span>
     </a>
@@ -59,14 +62,25 @@
   </div>
   {% endif %}
 
-  {% if active_status == 'in_warehouse' and counts.get('unpaid', 0) > 0 %}
-  <div class="px-4 py-2 bg-amber-50 border-b border-amber-100 flex items-center gap-3 flex-wrap">
-    <span class="text-xs text-amber-700"><strong>{{ counts.unpaid }}</strong> unpaid</span>
-    <a href="/parcels?status=in_warehouse&unpaid=1" class="text-xs font-medium text-amber-700 underline">Show unpaid only</a>
-    {% if can(current_user, 'edit_parcel') %}
-    <a href="/parcels/report/new" class="ml-auto text-xs bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg font-medium transition-colors">Generate Report</a>
-    {% endif %}
+  {% if active_status == 'ready_to_pay' and counts.get('ready_to_pay', 0) > 0 and can(current_user, 'edit_parcel') %}
+  <div class="px-4 py-2 bg-green-50 border-b border-green-100 flex items-center gap-3 flex-wrap">
+    <span class="text-xs text-green-700"><strong>{{ counts.ready_to_pay }}</strong> parcels ready to pay</span>
+    <a href="/parcels/report/new" class="ml-auto text-xs bg-green-700 hover:bg-green-800 text-white px-3 py-1.5 rounded-lg font-medium transition-colors">Generate Payment Report</a>
   </div>
+  {% endif %}
+  {% if active_status == 'paid' and report %}
+  <div class="px-4 py-2 bg-emerald-50 border-b border-emerald-100 flex items-center gap-2 text-xs text-emerald-800">
+    Showing report: <strong>{{ report }}</strong>
+    <a href="/parcels?status=paid" class="ml-auto text-emerald-600 hover:underline">Show all paid</a>
+  </div>
+  {% endif %}
+  {% if active_status == 'return_to_supplier' %}
+  {% set pending_return = parcels | selectattr('is_returned', 'equalto', false) | list | length %}
+  {% if pending_return > 0 %}
+  <div class="px-4 py-2 bg-orange-50 border-b border-orange-100 flex items-center gap-2 text-xs text-orange-800">
+    <strong>{{ pending_return }}</strong> pending return to supplier
+  </div>
+  {% endif %}
   {% endif %}
 
   <!-- Search -->
@@ -152,11 +166,14 @@
         {% if first.asin %}<span class="font-mono">{{ first.asin }}</span>{% endif %}
         <span>qty {{ group | sum(attribute='qty') }}</span>
         {% if first.supplier %}<span>{{ first.supplier.name }}</span>{% endif %}
-        {% if active_status == 'in_warehouse' %}
-          {% if first.payment_report_date %}
-          <span class="bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">{{ first.payment_report_date }}</span>
+        {% if active_status == 'paid' and first.payment_report_date %}
+          <span class="bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">{{ first.payment_report_date }}</span>
+        {% endif %}
+        {% if active_status == 'return_to_supplier' %}
+          {% if first.is_returned %}
+          <span class="bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full font-medium">Returned</span>
           {% else %}
-          <span class="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">Unpaid</span>
+          <span class="bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">Pending</span>
           {% endif %}
         {% endif %}
         <span class="ml-auto">{{ first.created_at.strftime('%d.%m.%Y') if first.created_at else "" }}</span>
@@ -203,11 +220,14 @@
           {% if p.is_wrong_address %}
           <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">Wrong address</span>
           {% endif %}
-          {% if active_status == 'in_warehouse' %}
-            {% if p.payment_report_date %}
-            <span class="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">{{ p.payment_report_date }}</span>
+          {% if active_status == 'paid' and p.payment_report_date %}
+            <span class="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">{{ p.payment_report_date }}</span>
+          {% endif %}
+          {% if active_status == 'return_to_supplier' %}
+            {% if p.is_returned %}
+            <span class="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full font-medium">Returned</span>
             {% else %}
-            <span class="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-medium">Unpaid</span>
+            <span class="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">Pending</span>
             {% endif %}
           {% endif %}
         {% endif %}
@@ -278,7 +298,7 @@
     </button>
     <div x-show="open" @click.outside="open = false"
          class="absolute bottom-full mb-2 left-0 bg-white rounded-xl shadow-xl border border-gray-100 py-1 min-w-max">
-      {% for s, label in [('unidentified','Unidentified'),('in_transit','In Transit'),('delivered','Delivered'),('in_warehouse','In Warehouse'),('in_forwarding','In Forwarding'),('disposed','Disposed'),('sold','Sold')] %}
+      {% for s, label in [('unidentified','Unidentified'),('in_transit','In Transit'),('delivered','Delivered'),('ready_to_pay','Ready to Pay'),('paid','Paid'),('forwarding','Forwarding'),('return_to_supplier','Return to Supplier'),('sold','Sold'),('ignored','Ignored')] %}
       <button @click="bulkAction('set_status', '{{ s }}'); open = false"
               class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors">{{ label }}</button>
       {% endfor %}

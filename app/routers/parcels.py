@@ -12,7 +12,7 @@ from app.auth import require_manager_up, get_current_user
 from app.models.parcel import Parcel, ParcelPhoto, ParcelComment, ParcelLog
 from app.models.supplier import Supplier
 from app.models.client import Client
-from app.services.parcel_service import transition_parcel, STATUS_LABELS, STATUS_COLORS, VALID_TRANSITIONS
+from app.services.parcel_service import transition_parcel, STATUS_LABELS, STATUS_COLORS, VALID_TRANSITIONS, ALL_STATUSES
 from app.permissions import can
 from app.services import keepa_service
 
@@ -101,13 +101,8 @@ def parcel_list(
 
     counts = {}
     base = _company_query(db, current_user)
-    for s in ["unidentified", "in_transit", "delivered", "in_warehouse", "in_forwarding", "disposed", "sold"]:
+    for s in ALL_STATUSES:
         counts[s] = base.filter(Parcel.status == s).count()
-    counts["unpaid"] = (
-        _company_query(db, current_user)
-        .filter(Parcel.status == "in_warehouse", Parcel.payment_report_date.is_(None))
-        .count()
-    )
 
     clients = db.query(Client).order_by(Client.name).all() if current_user.role == "super_admin" or not current_user.client_id else []
 
@@ -274,10 +269,10 @@ def report_new(
     current_user=Depends(require_manager_up),
 ):
     if not can(current_user, "edit_parcel"):
-        return RedirectResponse("/parcels?status=in_warehouse", status_code=302)
+        return RedirectResponse("/parcels?status=ready_to_pay", status_code=302)
     parcels = (
         _company_query(db, current_user)
-        .filter(Parcel.status == "in_warehouse", Parcel.payment_report_date.is_(None))
+        .filter(Parcel.status == "ready_to_pay")
         .order_by(Parcel.external_order_id.asc(), Parcel.created_at.asc())
         .all()
     )
@@ -302,19 +297,16 @@ def report_confirm(
     current_user=Depends(require_manager_up),
 ):
     if not can(current_user, "edit_parcel"):
-        return RedirectResponse("/parcels?status=in_warehouse", status_code=302)
+        return RedirectResponse("/parcels?status=ready_to_pay", status_code=302)
     if parcel_ids:
-        parcels = (
-            db.query(Parcel)
-            .filter(Parcel.id.in_(parcel_ids))
-            .all()
-        )
+        parcels = db.query(Parcel).filter(Parcel.id.in_(parcel_ids)).all()
         for p in parcels:
+            p.status = "paid"
             p.payment_report_date = report_date
         db.commit()
     import urllib.parse
     return RedirectResponse(
-        f"/parcels?status=in_warehouse&report={urllib.parse.quote(report_date)}",
+        f"/parcels?status=paid&report={urllib.parse.quote(report_date)}",
         status_code=302,
     )
 
@@ -753,8 +745,8 @@ def parcel_accept(
             except ValueError:
                 pass
 
-    # Transition to in_warehouse
-    transition_parcel(parcel, "in_warehouse", db,
+    # Transition to ready_to_pay
+    transition_parcel(parcel, "ready_to_pay", db,
                       changed_by=current_user.full_name or current_user.username,
                       notes="problem" if condition == "problem" else "")
 
@@ -917,6 +909,60 @@ def parcel_fetch_prep_status(
         return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
     background_tasks.add_task(_bg_fetch_prep_status, parcel_id, parcel.prime_prep_shipment_id)
+    return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+
+@router.post("/{parcel_id}/forward")
+def parcel_create_forward(
+    request: Request,
+    parcel_id: int,
+    new_tracking: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    """Create a new in_transit parcel for the correct warehouse, linked to this forwarding parcel."""
+    if not can(current_user, "edit_parcel"):
+        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+    parent = db.query(Parcel).filter(Parcel.id == parcel_id).first()
+    if not parent or parent.status != "forwarding":
+        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+    child = Parcel(
+        tracking_number=new_tracking.strip(),
+        external_order_id=parent.external_order_id,
+        supplier_id=parent.supplier_id,
+        client_id=parent.client_id,
+        qty=parent.qty,
+        asin=parent.asin,
+        title=parent.title,
+        status="in_transit",
+        forwarded_from_id=parent.id,
+        notes=f"Forwarded from {parent.tracking_number}",
+    )
+    db.add(child)
+    db.flush()
+    _log(db, parent.id, "forward_created", f"New tracking: {new_tracking.strip()}", user=current_user)
+    _log(db, child.id, "created", f"Forwarded from {parent.tracking_number}", user=current_user)
+    db.commit()
+    return RedirectResponse(f"/parcels/{child.id}", status_code=302)
+
+
+@router.post("/{parcel_id}/mark-returned")
+def parcel_mark_returned(
+    request: Request,
+    parcel_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    """Mark a return_to_supplier parcel as physically sent back."""
+    if not can(current_user, "edit_parcel"):
+        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+    parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
+    if parcel and parcel.status == "return_to_supplier" and not parcel.is_returned:
+        parcel.is_returned = True
+        parcel.returned_at = datetime.utcnow()
+        _log(db, parcel_id, "returned_to_supplier", None, user=current_user)
+        db.commit()
     return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
 

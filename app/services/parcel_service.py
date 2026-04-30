@@ -1,17 +1,28 @@
 """
-Parcel status state machine:
+Parcel status state machine
+===========================
 
-  in_transit   → delivered    (automatic: housecargo sync marks as delivered)
-  delivered    → in_warehouse (manual: staff checks physical parcel)
-  in_warehouse → in_forwarding | disposed
-  in_forwarding → in_warehouse | disposed
-  in_warehouse / in_forwarding → sold (set by order_service)
-  disposed → (terminal)
-  sold     → (terminal)
+  [Sync/Import] ──→ in_transit
+                         │ (sync confirms delivery)
+                         ↓
+                     delivered   ← physically at warehouse, not yet processed
+                    ↙     ↓     ↘
+            forwarding  Accept  return_to_supplier
+                │          ↓           │
+         [new tracking]  ready_to_pay  [mark returned → is_returned=True]
+                │          ↓
+        new in_transit    paid
+                           ↓
+                          sold
 
-Payment (separate from status):
-  payment_report_date = None  → unpaid
-  payment_report_date = "YYYY-MM-DD" → paid (tagged with report date)
+  [Sync] ──→ unidentified ──→ in_transit / forwarding / ignored
+  [Any]  ──→ ignored      ──→ in_transit (un-ignore)
+
+Notes
+-----
+- forwarding and return_to_supplier have no further status transitions;
+  special routes /forward and /mark-returned handle their lifecycle.
+- payment_report_date is a metadata tag set when status → paid.
 """
 from datetime import datetime
 from typing import Optional
@@ -20,35 +31,59 @@ from sqlalchemy.orm import Session
 
 from app.models.parcel import Parcel, ParcelStatusLog
 
-VALID_TRANSITIONS = {
-    "unidentified":  ["in_transit", "in_forwarding", "disposed"],
-    "in_transit":    ["delivered", "in_warehouse", "disposed"],
-    "delivered":     ["in_warehouse", "disposed"],
-    "in_forwarding": ["in_warehouse", "disposed"],
-    "in_warehouse":  ["in_forwarding", "disposed"],
-    "disposed":      [],
-    "sold":          [],
+VALID_TRANSITIONS: dict[str, list[str]] = {
+    "unidentified":       ["in_transit", "forwarding", "ignored"],
+    "in_transit":         ["delivered", "ignored"],
+    "delivered":          ["ready_to_pay", "forwarding", "return_to_supplier"],
+    "ready_to_pay":       ["paid", "return_to_supplier"],
+    "paid":               ["sold"],
+    "forwarding":         [],
+    "return_to_supplier": [],
+    "sold":               [],
+    "ignored":            ["in_transit"],
+    # legacy — kept for backward-compat display only
+    "disposed":           [],
+    "in_warehouse":       ["ready_to_pay"],
+    "in_forwarding":      ["forwarding"],
 }
 
-STATUS_LABELS = {
-    "unidentified":  "Unidentified",
-    "in_transit":    "In Transit",
-    "delivered":     "Delivered to Warehouse",
-    "in_warehouse":  "In Warehouse",
-    "in_forwarding": "In Forwarding",
-    "disposed":      "Disposed",
-    "sold":          "Sold",
+STATUS_LABELS: dict[str, str] = {
+    "unidentified":       "Unidentified",
+    "in_transit":         "In Transit",
+    "delivered":          "Delivered",
+    "ready_to_pay":       "Ready to Pay",
+    "paid":               "Paid",
+    "forwarding":         "Forwarding",
+    "return_to_supplier": "Return to Supplier",
+    "sold":               "Sold",
+    "ignored":            "Ignored",
+    # legacy
+    "disposed":           "Disposed",
+    "in_warehouse":       "In Warehouse (legacy)",
+    "in_forwarding":      "In Forwarding (legacy)",
 }
 
-STATUS_COLORS = {
-    "unidentified":  "bg-gray-100 text-gray-600",
-    "in_transit":    "bg-yellow-100 text-yellow-800",
-    "delivered":     "bg-sky-100 text-sky-800",
-    "in_warehouse":  "bg-green-100 text-green-800",
-    "in_forwarding": "bg-blue-100 text-blue-800",
-    "disposed":      "bg-red-100 text-red-800",
-    "sold":          "bg-purple-100 text-purple-800",
+STATUS_COLORS: dict[str, str] = {
+    "unidentified":       "bg-gray-100 text-gray-600",
+    "in_transit":         "bg-yellow-100 text-yellow-800",
+    "delivered":          "bg-sky-100 text-sky-800",
+    "ready_to_pay":       "bg-green-100 text-green-800",
+    "paid":               "bg-emerald-100 text-emerald-800",
+    "forwarding":         "bg-blue-100 text-blue-800",
+    "return_to_supplier": "bg-orange-100 text-orange-800",
+    "sold":               "bg-purple-100 text-purple-800",
+    "ignored":            "bg-gray-50 text-gray-400",
+    # legacy
+    "disposed":           "bg-red-100 text-red-800",
+    "in_warehouse":       "bg-green-100 text-green-700",
+    "in_forwarding":      "bg-blue-100 text-blue-700",
 }
+
+ALL_STATUSES = [
+    "unidentified", "in_transit", "delivered",
+    "ready_to_pay", "paid", "forwarding",
+    "return_to_supplier", "sold", "ignored",
+]
 
 
 def transition_parcel(
@@ -61,21 +96,20 @@ def transition_parcel(
     allowed = VALID_TRANSITIONS.get(parcel.status, [])
     if new_status not in allowed:
         return False, (
-            f"Transition from '{STATUS_LABELS.get(parcel.status)}' "
-            f"to '{STATUS_LABELS.get(new_status)}' is not allowed"
+            f"Transition from '{STATUS_LABELS.get(parcel.status, parcel.status)}' "
+            f"to '{STATUS_LABELS.get(new_status, new_status)}' is not allowed"
         )
 
-    log = ParcelStatusLog(
+    db.add(ParcelStatusLog(
         parcel_id=parcel.id,
         old_status=parcel.status,
         new_status=new_status,
         changed_by=changed_by,
         notes=notes,
-    )
-    db.add(log)
+    ))
 
     parcel.status = new_status
-    if new_status in ("delivered", "in_warehouse") and not parcel.arrived_at:
+    if new_status in ("delivered", "ready_to_pay") and not parcel.arrived_at:
         parcel.arrived_at = datetime.utcnow()
     parcel.updated_at = datetime.utcnow()
 

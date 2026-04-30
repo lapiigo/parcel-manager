@@ -30,10 +30,15 @@ class Parcel(Base):
     height_cm = Column(Float, nullable=True)
     notes = Column(Text, nullable=True)
     arrived_at = Column(DateTime, nullable=True)
+    # Forwarding: points to the original parcel that was at the wrong warehouse
+    forwarded_from_id = Column(Integer, ForeignKey("parcels.id"), nullable=True)
+    # Return to supplier tracking
+    is_returned = Column(Boolean, default=False, nullable=False)
+    returned_at = Column(DateTime, nullable=True)
     # Prime Prep integration
     prime_prep_shipment_id = Column(String(100), nullable=True)
     prime_prep_status = Column(String(50), nullable=True)
-    # Payment: when set → parcel is paid; value = report date (tag)
+    # Report tag — set when status transitions to paid
     payment_report_date = Column(String(10), nullable=True, index=True)  # "YYYY-MM-DD"
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
@@ -45,6 +50,7 @@ class Parcel(Base):
     status_logs = relationship("ParcelStatusLog", back_populates="parcel", cascade="all, delete-orphan", order_by="ParcelStatusLog.changed_at.desc()")
     activity_logs = relationship("ParcelLog", back_populates="parcel", cascade="all, delete-orphan", order_by="ParcelLog.created_at.asc()")
     orders = relationship("Order", back_populates="parcel")
+    forwarded_from = relationship("Parcel", remote_side="Parcel.id", foreign_keys=[forwarded_from_id], backref="forwards")
 
 
 class ParcelPhoto(Base):
