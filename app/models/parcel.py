@@ -50,7 +50,29 @@ class Parcel(Base):
     status_logs = relationship("ParcelStatusLog", back_populates="parcel", cascade="all, delete-orphan", order_by="ParcelStatusLog.changed_at.desc()")
     activity_logs = relationship("ParcelLog", back_populates="parcel", cascade="all, delete-orphan", order_by="ParcelLog.created_at.asc()")
     orders = relationship("Order", back_populates="parcel")
+    # Client review fields
+    client_action = Column(String(50), nullable=True)         # accepted/overstock/damaged/very_damaged/wrong_item
+    client_discount_proposed = Column(Float, nullable=True)   # latest discount % proposed by client
+    client_notes = Column(Text, nullable=True)                # client's description of the issue
+    client_reviewed_at = Column(DateTime, nullable=True)      # when client first processed
+
     forwarded_from = relationship("Parcel", remote_side="Parcel.id", foreign_keys=[forwarded_from_id], backref="forwards")
+    negotiations = relationship("ParcelNegotiation", back_populates="parcel", cascade="all, delete-orphan", order_by="ParcelNegotiation.created_at.asc()")
+
+
+class ParcelNegotiation(Base):
+    __tablename__ = "parcel_negotiations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    parcel_id = Column(Integer, ForeignKey("parcels.id", ondelete="CASCADE"), nullable=False)
+    round_number = Column(Integer, default=1)
+    actor = Column(String(10), nullable=False)    # client | admin
+    action = Column(String(50), nullable=False)   # accepted/overstock/damaged/very_damaged/wrong_item_accept/wrong_item_discount/wrong_item_return/counter_offer/approved/approve_return
+    discount_proposed = Column(Float, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    parcel = relationship("Parcel", back_populates="negotiations")
 
 
 class ParcelPhoto(Base):

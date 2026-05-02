@@ -4,83 +4,336 @@
 {% block header_actions %}<a href="/portal/parcels" class="text-sm text-gray-500 hover:text-gray-700">← Back</a>{% endblock %}
 
 {% block content %}
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-  <div class="lg:col-span-2 space-y-5">
+<div class="space-y-5">
 
-    <!-- Info -->
-    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-      <h3 class="text-sm font-semibold text-gray-700 mb-4">Parcel Information</h3>
-      <dl class="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+  <!-- Info card -->
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+    <h3 class="text-sm font-semibold text-gray-700 mb-4">Parcel Information</h3>
+    <dl class="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+      <div>
+        <dt class="text-gray-400">Status</dt>
+        <dd><span class="px-2 py-1 rounded-full text-xs font-medium {{ STATUS_COLORS.get(parcel.status, '') }}">{{ STATUS_LABELS.get(parcel.status, parcel.status) }}</span></dd>
+      </div>
+      <div>
+        <dt class="text-gray-400">Tracking</dt>
+        <dd class="font-mono text-xs font-semibold text-gray-800 break-all">{{ parcel.tracking_number }}</dd>
+      </div>
+      {% if parcel.external_order_id %}
+      <div>
+        <dt class="text-gray-400">Order ID</dt>
+        <dd class="font-mono text-xs text-gray-700">{{ parcel.external_order_id }}</dd>
+      </div>
+      {% endif %}
+      {% if parcel.asin %}
+      <div>
+        <dt class="text-gray-400">ASIN</dt>
+        <dd class="font-mono text-xs text-gray-700">{{ parcel.asin }}</dd>
+      </div>
+      {% endif %}
+      {% if parcel.qty %}
+      <div>
+        <dt class="text-gray-400">Qty</dt>
+        <dd class="font-medium text-gray-700">{{ parcel.qty }}</dd>
+      </div>
+      {% endif %}
+      {% if parcel.weight_kg %}
+      <div>
+        <dt class="text-gray-400">Weight</dt>
+        <dd class="font-medium text-gray-700">{{ parcel.weight_kg }} kg</dd>
+      </div>
+      {% endif %}
+      {% if parcel.title %}
+      <div class="col-span-2">
+        <dt class="text-gray-400">Product</dt>
+        <dd class="font-medium text-gray-700">{{ parcel.title }}</dd>
+      </div>
+      {% endif %}
+      {% if parcel.arrived_at %}
+      <div>
+        <dt class="text-gray-400">Arrived at Warehouse</dt>
+        <dd class="font-medium text-gray-700">
+          <time class="local-time" datetime="{{ parcel.arrived_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ parcel.arrived_at.strftime('%d.%m.%Y %H:%M') }}</time>
+        </dd>
+      </div>
+      {% endif %}
+    </dl>
+  </div>
+
+  <!-- ── ACTION: Delivered — process this parcel ───────────────────────────── -->
+  {% if parcel.status == 'delivered' %}
+  <div class="bg-sky-50 border border-sky-200 rounded-xl p-6" x-data="{
+    action: '',
+    showDiscount: false,
+    showReturn: false,
+    setAction(v) {
+      this.action = v;
+      this.showDiscount = ['overstock','damaged','wrong_item_discount'].includes(v);
+      this.showReturn   = ['very_damaged','wrong_item_return'].includes(v);
+    }
+  }">
+    <div class="flex items-center gap-2 mb-4">
+      <svg class="w-5 h-5 text-sky-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <h3 class="text-sm font-semibold text-sky-800">Process this Parcel</h3>
+    </div>
+    <p class="text-sm text-sky-700 mb-5">This parcel arrived at the warehouse. Please review it and choose one of the options below.</p>
+
+    <!-- Action buttons -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+      <button type="button" @click="setAction('accepted')"
+        :class="action === 'accepted' ? 'ring-2 ring-green-500 bg-green-100' : 'bg-white hover:bg-green-50'"
+        class="flex items-center gap-3 p-3 rounded-lg border border-green-200 text-left transition-all">
+        <span class="text-xl">✅</span>
         <div>
-          <dt class="text-gray-400">Status</dt>
-          <dd><span class="px-2 py-1 rounded-full text-xs font-medium {{ STATUS_COLORS.get(parcel.status, '') }}">{{ STATUS_LABELS.get(parcel.status, parcel.status) }}</span></dd>
+          <p class="text-sm font-semibold text-green-800">All OK</p>
+          <p class="text-xs text-green-600">Parcel is in perfect condition</p>
         </div>
+      </button>
+
+      <button type="button" @click="setAction('overstock')"
+        :class="action === 'overstock' ? 'ring-2 ring-amber-500 bg-amber-100' : 'bg-white hover:bg-amber-50'"
+        class="flex items-center gap-3 p-3 rounded-lg border border-amber-200 text-left transition-all">
+        <span class="text-xl">📦</span>
         <div>
-          <dt class="text-gray-400">Weight</dt>
-          <dd class="font-medium text-gray-700">{{ parcel.weight_kg|string + " kg" if parcel.weight_kg else "—" }}</dd>
+          <p class="text-sm font-semibold text-amber-800">Overstock</p>
+          <p class="text-xs text-amber-600">Too many of this item — request discount</p>
         </div>
-        <div class="col-span-2">
-          <dt class="text-gray-400">Description</dt>
-          <dd class="font-medium text-gray-700">{{ parcel.description or "—" }}</dd>
-        </div>
+      </button>
+
+      <button type="button" @click="setAction('damaged')"
+        :class="action === 'damaged' ? 'ring-2 ring-orange-500 bg-orange-100' : 'bg-white hover:bg-orange-50'"
+        class="flex items-center gap-3 p-3 rounded-lg border border-orange-200 text-left transition-all">
+        <span class="text-xl">⚠️</span>
         <div>
-          <dt class="text-gray-400">Arrived at Warehouse</dt>
-          <dd class="font-medium text-gray-700">{{ parcel.arrived_at.strftime('%d.%m.%Y') if parcel.arrived_at else "Not arrived yet" }}</dd>
+          <p class="text-sm font-semibold text-orange-800">Damaged</p>
+          <p class="text-xs text-orange-600">Item is damaged — accept with discount</p>
         </div>
-      </dl>
+      </button>
+
+      <button type="button" @click="setAction('very_damaged')"
+        :class="action === 'very_damaged' ? 'ring-2 ring-red-500 bg-red-100' : 'bg-white hover:bg-red-50'"
+        class="flex items-center gap-3 p-3 rounded-lg border border-red-200 text-left transition-all">
+        <span class="text-xl">🚫</span>
+        <div>
+          <p class="text-sm font-semibold text-red-800">Very Damaged / Refuse</p>
+          <p class="text-xs text-red-600">Item is unusable — request return</p>
+        </div>
+      </button>
+
+      <button type="button" @click="setAction('wrong_item_accept')"
+        :class="action === 'wrong_item_accept' ? 'ring-2 ring-purple-500 bg-purple-100' : 'bg-white hover:bg-purple-50'"
+        class="flex items-center gap-3 p-3 rounded-lg border border-purple-200 text-left transition-all">
+        <span class="text-xl">❓</span>
+        <div>
+          <p class="text-sm font-semibold text-purple-800">Wrong Item — Accept</p>
+          <p class="text-xs text-purple-600">Will accept as-is</p>
+        </div>
+      </button>
+
+      <button type="button" @click="setAction('wrong_item_discount')"
+        :class="action === 'wrong_item_discount' ? 'ring-2 ring-purple-500 bg-purple-100' : 'bg-white hover:bg-purple-50'"
+        class="flex items-center gap-3 p-3 rounded-lg border border-purple-200 text-left transition-all">
+        <span class="text-xl">🔖</span>
+        <div>
+          <p class="text-sm font-semibold text-purple-800">Wrong Item — Discount</p>
+          <p class="text-xs text-purple-600">Accept with a discount</p>
+        </div>
+      </button>
+
+      <button type="button" @click="setAction('wrong_item_return')"
+        :class="action === 'wrong_item_return' ? 'ring-2 ring-red-500 bg-red-100' : 'bg-white hover:bg-red-50'"
+        class="flex items-center gap-3 p-3 rounded-lg border border-red-200 text-left transition-all col-span-full sm:col-span-1">
+        <span class="text-xl">↩️</span>
+        <div>
+          <p class="text-sm font-semibold text-red-800">Wrong Item — Return</p>
+          <p class="text-xs text-red-600">Request return to supplier</p>
+        </div>
+      </button>
     </div>
 
-    <!-- Photos -->
-    {% if parcel.photos %}
-    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-      <h3 class="text-sm font-semibold text-gray-700 mb-4">Photos</h3>
-      <div class="grid grid-cols-3 gap-3">
-        {% for photo in parcel.photos %}
-        <div>
-          <img src="{{ photo.file_path }}" alt="{{ photo.caption or '' }}" class="w-full h-28 object-cover rounded-lg border border-gray-100" />
-          {% if photo.caption %}<p class="text-xs text-gray-500 mt-1 truncate">{{ photo.caption }}</p>{% endif %}
+    <!-- Form (shown after selection) -->
+    <form x-show="action !== ''" x-transition method="post" action="/portal/parcels/{{ parcel.id }}/process"
+          enctype="multipart/form-data" class="space-y-4 pt-4 border-t border-sky-200">
+      <input type="hidden" name="action" :value="action" />
+
+      <!-- Discount field -->
+      <div x-show="showDiscount">
+        <label class="block text-sm font-medium text-gray-700 mb-1">Requested Discount (%)</label>
+        <div class="flex items-center gap-2">
+          <input type="number" name="discount" min="1" max="100" step="0.5" placeholder="e.g. 15"
+                 class="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          <span class="text-sm text-gray-500">% off the purchase price</span>
         </div>
-        {% endfor %}
       </div>
+
+      <!-- Return notice -->
+      <div x-show="showReturn" class="bg-red-50 border border-red-200 rounded-lg p-3">
+        <p class="text-sm text-red-700 font-medium">⚠️ This will request a return to the supplier. Please describe the issue in detail below.</p>
+      </div>
+
+      <!-- Notes -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Notes / Description</label>
+        <textarea name="notes" rows="3" placeholder="Describe the issue, condition, or any relevant details..."
+                  class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+      </div>
+
+      <!-- Photos -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Photos (optional)</label>
+        <p class="text-xs text-gray-400 mb-2">Attach photos showing the issue</p>
+        <input type="file" name="photos" multiple accept="image/*"
+               class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" />
+      </div>
+
+      <button type="submit"
+              class="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-6 py-2.5 rounded-lg transition-colors">
+        Submit Review
+      </button>
+    </form>
+  </div>
+
+  <!-- ── STATUS: Negotiating ───────────────────────────────────────────────── -->
+  {% elif parcel.status == 'negotiating' %}
+  <div class="bg-amber-50 border border-amber-200 rounded-xl p-6">
+    <div class="flex items-center gap-2 mb-4">
+      <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+      <h3 class="text-sm font-semibold text-amber-800">Negotiation in Progress</h3>
+    </div>
+
+    <!-- Negotiation rounds -->
+    {% if parcel.negotiations %}
+    <div class="space-y-3 mb-5">
+      {% for round in parcel.negotiations %}
+      <div class="flex gap-3 {% if round.actor == 'client' %}justify-end{% endif %}">
+        <div class="max-w-sm {% if round.actor == 'client' %}bg-indigo-100 border border-indigo-200{% else %}bg-white border border-amber-200{% endif %} rounded-xl px-4 py-3">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-xs font-semibold {% if round.actor == 'client' %}text-indigo-700{% else %}text-amber-700{% endif %}">
+              {% if round.actor == 'client' %}You{% else %}Supplier{% endif %}
+            </span>
+            <span class="text-xs text-gray-400">Round {{ round.round_number }}</span>
+            <span class="text-xs text-gray-300">{{ round.created_at.strftime('%d.%m %H:%M') if round.created_at else '' }}</span>
+          </div>
+          <p class="text-sm font-medium text-gray-800">
+            {% if round.action == 'approved' %}✅ Approved
+            {% elif round.action == 'counter_offer' %}↩️ Counter Offer
+            {% elif round.action == 'approve_return' %}📦 Return Approved
+            {% elif round.action == 'accepted' %}✅ Accepted
+            {% else %}{{ CLIENT_ACTION_LABELS.get(round.action, round.action) }}{% endif %}
+          </p>
+          {% if round.discount_proposed is not none %}
+          <p class="text-sm text-gray-600">Discount: <strong>{{ round.discount_proposed }}%</strong></p>
+          {% endif %}
+          {% if round.notes %}
+          <p class="text-sm text-gray-600 mt-1">{{ round.notes }}</p>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
     </div>
     {% endif %}
 
-    <!-- Report a problem / comment -->
-    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-      <h3 class="text-sm font-semibold text-gray-700 mb-1">Report an issue or leave a comment</h3>
-      <p class="text-xs text-gray-400 mb-4">Let us know if everything is OK or if there is a problem with the parcel</p>
-      <form method="post" action="/portal/parcels/{{ parcel.id }}/comment" class="space-y-3">
-        <div class="flex gap-3">
-          <button type="submit" name="body" value="✅ Everything is OK" class="px-4 py-2 bg-green-50 border border-green-200 text-green-700 rounded-lg text-sm font-medium hover:bg-green-100 transition-colors">✅ Everything is OK</button>
-          <button type="submit" name="body" value="⚠️ There is a problem with the parcel" class="px-4 py-2 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm font-medium hover:bg-red-100 transition-colors">⚠️ There is a problem</button>
-        </div>
-        <textarea name="body" rows="3" placeholder="Or write your own comment..."
-                  class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
-        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Send</button>
-      </form>
-    </div>
+    <!-- Waiting message or respond form -->
+    {% if can_negotiate %}
+    <div class="border-t border-amber-200 pt-4">
+      <p class="text-sm font-medium text-amber-800 mb-3">The supplier has responded. You can accept their offer or send a counter-offer:</p>
 
-    <!-- Comments -->
-    {% if parcel.comments %}
-    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-      <h3 class="text-sm font-semibold text-gray-700 mb-4">Comments</h3>
-      <div class="space-y-3">
-        {% for c in parcel.comments %}
-        <div class="bg-gray-50 rounded-lg p-3">
-          <div class="flex items-center justify-between mb-1">
-            <span class="text-xs font-semibold text-gray-600">{{ c.author or "—" }}</span>
-            <span class="text-xs text-gray-400">{{ c.created_at.strftime('%d.%m.%Y %H:%M') if c.created_at else "" }}</span>
-          </div>
-          <p class="text-sm text-gray-700">{{ c.body }}</p>
-        </div>
-        {% endfor %}
+      {% if parcel.negotiations[-1].action == 'counter_offer' %}
+      <!-- Supplier sent counter-offer — accept or counter -->
+      <div class="flex flex-wrap gap-2 mb-4">
+        <form method="post" action="/portal/parcels/{{ parcel.id }}/negotiate" class="inline">
+          <input type="hidden" name="action" value="accepted" />
+          <button type="submit" class="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors">
+            ✅ Accept Offer
+          </button>
+        </form>
       </div>
+
+      <details class="mt-2">
+        <summary class="text-sm text-indigo-600 cursor-pointer hover:underline">Send a different offer instead</summary>
+        <form method="post" action="/portal/parcels/{{ parcel.id }}/negotiate" class="space-y-3 mt-3">
+          <input type="hidden" name="action" value="counter_offer" />
+          <div>
+            <label class="block text-xs font-medium text-gray-600 mb-1">Your Discount (%)</label>
+            <input type="number" name="discount" min="1" max="100" step="0.5" placeholder="e.g. 20"
+                   class="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-600 mb-1">Comment</label>
+            <textarea name="notes" rows="2" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+          </div>
+          <button type="submit" class="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-lg hover:bg-amber-700 transition-colors">
+            Send Counter-Offer
+          </button>
+        </form>
+      </details>
+      {% else %}
+      <p class="text-sm text-gray-500 italic">Supplier response received. Use the options above.</p>
+      {% endif %}
     </div>
+    {% else %}
+    <p class="text-sm text-amber-700 italic">Your offer has been sent. Waiting for the supplier to respond.</p>
     {% endif %}
   </div>
 
+  {% endif %}
+
+  <!-- Photos -->
+  {% if parcel.photos %}
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+    <h3 class="text-sm font-semibold text-gray-700 mb-4">Photos</h3>
+    <div class="grid grid-cols-3 sm:grid-cols-4 gap-3">
+      {% for photo in parcel.photos %}
+      <div>
+        <a href="{{ photo.file_path }}" target="_blank">
+          <img src="{{ photo.file_path }}" alt="{{ photo.caption or '' }}" class="w-full h-28 object-cover rounded-lg border border-gray-100 hover:opacity-90 transition-opacity" />
+        </a>
+        {% if photo.caption %}<p class="text-xs text-gray-500 mt-1 truncate">{{ photo.caption }}</p>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Negotiation history (for non-delivered/negotiating) -->
+  {% if parcel.client_action and parcel.status not in ('delivered', 'negotiating') %}
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+    <h3 class="text-sm font-semibold text-gray-700 mb-3">Review Summary</h3>
+    <dl class="text-sm space-y-2">
+      <div class="flex gap-2">
+        <dt class="text-gray-400 w-28 shrink-0">Your action</dt>
+        <dd class="font-medium text-gray-700">{{ CLIENT_ACTION_LABELS.get(parcel.client_action, parcel.client_action) }}</dd>
+      </div>
+      {% if parcel.client_discount_proposed is not none %}
+      <div class="flex gap-2">
+        <dt class="text-gray-400 w-28 shrink-0">Discount</dt>
+        <dd class="font-medium text-gray-700">{{ parcel.client_discount_proposed }}%</dd>
+      </div>
+      {% endif %}
+      {% if parcel.client_notes %}
+      <div class="flex gap-2">
+        <dt class="text-gray-400 w-28 shrink-0">Notes</dt>
+        <dd class="text-gray-700">{{ parcel.client_notes }}</dd>
+      </div>
+      {% endif %}
+    </dl>
+    {% if parcel.negotiations %}
+    <div class="mt-4 space-y-2">
+      {% for r in parcel.negotiations %}
+      <div class="flex gap-2 text-xs">
+        <span class="text-gray-400 w-14 shrink-0">Round {{ r.round_number }}</span>
+        <span class="font-medium {% if r.actor == 'client' %}text-indigo-700{% else %}text-amber-700{% endif %}">
+          {{ 'You' if r.actor == 'client' else 'Supplier' }}:
+        </span>
+        <span class="text-gray-600">{{ r.action }}{% if r.discount_proposed is not none %} ({{ r.discount_proposed }}%){% endif %}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
   <!-- Status history -->
-  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5 h-fit">
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
     <h3 class="text-sm font-semibold text-gray-700 mb-4">History</h3>
     <div class="space-y-3">
       {% for log in parcel.status_logs %}
@@ -89,7 +342,9 @@
         <div>
           <p class="text-xs text-gray-600 font-medium">{{ STATUS_LABELS.get(log.new_status, log.new_status) }}</p>
           {% if log.notes %}<p class="text-xs text-gray-400">{{ log.notes }}</p>{% endif %}
-          <p class="text-xs text-gray-300">{{ log.changed_at.strftime('%d.%m.%Y %H:%M') if log.changed_at else "" }}</p>
+          <p class="text-xs text-gray-300">
+            <time class="local-time" datetime="{{ log.changed_at.strftime('%Y-%m-%dT%H:%M:%SZ') if log.changed_at else '' }}">{{ log.changed_at.strftime('%d.%m.%Y %H:%M') if log.changed_at else '' }}</time>
+          </p>
         </div>
       </div>
       {% else %}
@@ -97,5 +352,6 @@
       {% endfor %}
     </div>
   </div>
+
 </div>
 {% endblock %}

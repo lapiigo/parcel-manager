@@ -9,7 +9,8 @@ from typing import Optional, List
 
 from app.database import get_db
 from app.auth import require_manager_up, get_current_user
-from app.models.parcel import Parcel, ParcelPhoto, ParcelComment, ParcelLog
+from app.models.parcel import Parcel, ParcelPhoto, ParcelComment, ParcelLog, ParcelNegotiation
+from app.models.client import ClientDeposit
 from app.models.supplier import Supplier
 from app.models.client import Client
 from app.services.parcel_service import transition_parcel, STATUS_LABELS, STATUS_COLORS, VALID_TRANSITIONS, ALL_STATUSES
@@ -964,6 +965,113 @@ def parcel_mark_returned(
         _log(db, parcel_id, "returned_to_supplier", None, user=current_user)
         db.commit()
     return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+
+@router.post("/{parcel_id}/admin-respond")
+def parcel_admin_respond(
+    request: Request,
+    parcel_id: int,
+    action: str = Form(...),   # approved | counter_offer | approve_return
+    discount: str = Form(""),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    """Admin responds to a client negotiation round."""
+    if not can(current_user, "edit_parcel"):
+        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+    parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
+    if not parcel or parcel.status != "negotiating":
+        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+    discount_val: float | None = None
+    if discount:
+        try:
+            discount_val = float(discount)
+        except ValueError:
+            pass
+
+    round_num = len(parcel.negotiations) + 1
+    actor_name = current_user.full_name or current_user.username
+
+    if action == "approved":
+        db.add(ParcelNegotiation(
+            parcel_id=parcel_id, round_number=round_num, actor="admin",
+            action="approved", discount_proposed=discount_val,
+            notes=notes.strip() or None,
+        ))
+        transition_parcel(parcel, "ready_to_pay", db, changed_by=actor_name,
+                          notes="Admin approved negotiation")
+        _log(db, parcel_id, "admin_approved_negotiation",
+             f"Approved" + (f" with discount: {discount_val}%" if discount_val else ""),
+             user=current_user)
+
+    elif action == "approve_return":
+        db.add(ParcelNegotiation(
+            parcel_id=parcel_id, round_number=round_num, actor="admin",
+            action="approve_return", discount_proposed=None,
+            notes=notes.strip() or None,
+        ))
+        transition_parcel(parcel, "return_to_supplier", db, changed_by=actor_name,
+                          notes="Admin approved client return request")
+        _log(db, parcel_id, "admin_approved_return", None, user=current_user)
+
+    else:  # counter_offer
+        db.add(ParcelNegotiation(
+            parcel_id=parcel_id, round_number=round_num, actor="admin",
+            action="counter_offer", discount_proposed=discount_val,
+            notes=notes.strip() or None,
+        ))
+        _log(db, parcel_id, "admin_counter_offer",
+             f"Round {round_num}" + (f", discount: {discount_val}%" if discount_val else ""),
+             user=current_user)
+        db.commit()
+
+    db.commit()
+    return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+
+# ── Deposit management (admin side) ──────────────────────────────────────────
+
+@router.post("/deposits/{deposit_id}/confirm")
+def admin_confirm_deposit(
+    request: Request,
+    deposit_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    """Admin confirms a pending client deposit, updating client balance."""
+    if not can(current_user, "edit_parcel"):
+        return RedirectResponse("/parcels", status_code=302)
+    deposit = db.query(ClientDeposit).filter(ClientDeposit.id == deposit_id).first()
+    if deposit and deposit.status == "pending":
+        deposit.status = "confirmed"
+        deposit.confirmed_at = datetime.utcnow()
+        deposit.confirmed_by = current_user.full_name or current_user.username
+        # Update client balance
+        client = db.query(Client).filter(Client.id == deposit.client_id).first()
+        if client:
+            client.balance = (client.balance or 0.0) + deposit.amount
+        db.commit()
+    return RedirectResponse(f"/clients/{deposit.client_id if deposit else ''}", status_code=302)
+
+
+@router.post("/deposits/{deposit_id}/reject")
+def admin_reject_deposit(
+    request: Request,
+    deposit_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    """Admin rejects a pending deposit."""
+    if not can(current_user, "edit_parcel"):
+        return RedirectResponse("/parcels", status_code=302)
+    deposit = db.query(ClientDeposit).filter(ClientDeposit.id == deposit_id).first()
+    client_id = deposit.client_id if deposit else None
+    if deposit and deposit.status == "pending":
+        deposit.status = "rejected"
+        db.commit()
+    return RedirectResponse(f"/clients/{client_id}" if client_id else "/parcels", status_code=302)
 
 
 @router.post("/{parcel_id}/delete")

@@ -223,6 +223,117 @@
     {% endif %}
   </div>
 
+  {% elif parcel.status == 'negotiating' %}
+  <!-- ── Negotiation Response (admin) ──────────────────────────────────────── -->
+  <div class="bg-amber-50 border border-amber-200 rounded-xl p-5 sm:p-6">
+    <div class="flex items-center gap-2 mb-4">
+      <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+      <h3 class="text-sm font-semibold text-amber-800">Client Negotiation</h3>
+    </div>
+
+    <!-- Client's initial review -->
+    {% if parcel.client_action %}
+    <div class="bg-white border border-amber-100 rounded-lg p-3 mb-4">
+      <p class="text-xs text-gray-400 mb-1">Client's initial action</p>
+      <p class="text-sm font-medium text-gray-800">
+        {% set action_labels = {
+          'accepted': 'All OK',
+          'overstock': 'Overstock',
+          'damaged': 'Damaged',
+          'very_damaged': 'Very Damaged / Refuse',
+          'wrong_item_accept': 'Wrong Item — Accept',
+          'wrong_item_discount': 'Wrong Item — Accept w/ Discount',
+          'wrong_item_return': 'Wrong Item — Return',
+        } %}
+        {{ action_labels.get(parcel.client_action, parcel.client_action) }}
+      </p>
+      {% if parcel.client_discount_proposed is not none %}
+      <p class="text-sm text-gray-600">Requested discount: <strong>{{ parcel.client_discount_proposed }}%</strong></p>
+      {% endif %}
+      {% if parcel.client_notes %}
+      <p class="text-sm text-gray-600 mt-1">{{ parcel.client_notes }}</p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <!-- Negotiation rounds -->
+    {% if parcel.negotiations %}
+    <div class="space-y-2 mb-4">
+      {% for r in parcel.negotiations %}
+      <div class="flex gap-2 {% if r.actor == 'client' %}justify-start{% else %}justify-end{% endif %}">
+        <div class="max-w-xs {% if r.actor == 'client' %}bg-white border border-amber-200{% else %}bg-amber-200 border border-amber-300{% endif %} rounded-lg px-3 py-2">
+          <div class="flex items-center gap-2 mb-0.5">
+            <span class="text-xs font-semibold {% if r.actor == 'client' %}text-indigo-700{% else %}text-amber-900{% endif %}">
+              {% if r.actor == 'client' %}Client{% else %}Admin (you){% endif %}
+            </span>
+            <span class="text-xs text-gray-400">R{{ r.round_number }}</span>
+          </div>
+          <p class="text-xs font-medium text-gray-800">
+            {% if r.action == 'approved' %}✅ Approved
+            {% elif r.action == 'counter_offer' %}↩️ Counter Offer
+            {% elif r.action == 'approve_return' %}📦 Return Approved
+            {% elif r.action == 'accepted' %}✅ Client Accepted
+            {% else %}{{ r.action }}{% endif %}
+          </p>
+          {% if r.discount_proposed is not none %}
+          <p class="text-xs text-gray-600">Discount: {{ r.discount_proposed }}%</p>
+          {% endif %}
+          {% if r.notes %}
+          <p class="text-xs text-gray-500 mt-0.5">{{ r.notes }}</p>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Check whose turn it is -->
+    {% set last_round = parcel.negotiations[-1] if parcel.negotiations else None %}
+    {% if not last_round or last_round.actor == 'client' %}
+    <!-- Admin's turn to respond -->
+    {% if can(current_user, 'edit_parcel') %}
+    <form method="post" action="/parcels/{{ parcel.id }}/admin-respond"
+          x-data="{ action: '' }" class="space-y-3 border-t border-amber-200 pt-4">
+      <div class="flex flex-wrap gap-2">
+        <button type="button" @click="action = 'approved'"
+                :class="action === 'approved' ? 'ring-2 ring-green-500 bg-green-100' : 'bg-white hover:bg-green-50'"
+                class="px-3 py-2 border border-green-200 rounded-lg text-sm font-medium text-green-800 transition-all">
+          ✅ Approve
+        </button>
+        <button type="button" @click="action = 'counter_offer'"
+                :class="action === 'counter_offer' ? 'ring-2 ring-amber-500 bg-amber-100' : 'bg-white hover:bg-amber-50'"
+                class="px-3 py-2 border border-amber-200 rounded-lg text-sm font-medium text-amber-800 transition-all">
+          ↩️ Counter Offer
+        </button>
+        <button type="button" @click="action = 'approve_return'"
+                :class="action === 'approve_return' ? 'ring-2 ring-red-500 bg-red-100' : 'bg-white hover:bg-red-50'"
+                class="px-3 py-2 border border-red-200 rounded-lg text-sm font-medium text-red-800 transition-all">
+          📦 Approve Return
+        </button>
+      </div>
+      <input type="hidden" name="action" :value="action" />
+      <div x-show="action !== ''">
+        <div x-show="action !== 'approve_return'" class="mb-3">
+          <label class="block text-xs font-medium text-gray-600 mb-1">Discount to apply (%)</label>
+          <input type="number" name="discount" min="0" max="100" step="0.5" placeholder="e.g. 10"
+                 class="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+          <textarea name="notes" rows="2" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+        </div>
+        <button type="submit" x-show="action !== ''"
+                class="mt-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-5 py-2 rounded-lg transition-colors">
+          Submit Response
+        </button>
+      </div>
+    </form>
+    {% endif %}
+    {% else %}
+    <p class="text-sm text-amber-700 italic border-t border-amber-200 pt-3">Your response has been sent. Waiting for client to reply.</p>
+    {% endif %}
+  </div>
+
   {% elif parcel.status == 'return_to_supplier' %}
   <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5 sm:p-6">
     <h3 class="text-sm font-semibold text-gray-700 mb-3">Return to Supplier</h3>

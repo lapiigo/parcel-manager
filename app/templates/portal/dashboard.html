@@ -3,50 +3,65 @@
 {% block heading %}Welcome, {{ current_user.full_name or current_user.username }}{% endblock %}
 
 {% block content %}
-<!-- Balance + stats -->
+
+<!-- Stats row -->
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
   <div class="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
     <p class="text-xs text-gray-400 uppercase tracking-wide font-medium">Balance</p>
-    <p class="text-3xl font-bold {% if client.balance >= 0 %}text-green-600{% else %}text-red-600{% endif %} mt-1">${{ "%.2f"|format(client.balance) }}</p>
+    <p class="text-3xl font-bold {% if client.balance >= 0 %}text-green-600{% else %}text-red-600{% endif %} mt-1">${{ "%.2f"|format(client.balance or 0) }}</p>
+    <a href="/portal/deposits" class="text-xs text-indigo-500 hover:underline mt-1 inline-block">Top up →</a>
   </div>
   <div class="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
     <p class="text-xs text-gray-400 uppercase tracking-wide font-medium">In Transit</p>
-    <p class="text-3xl font-bold text-yellow-600 mt-1">{{ parcels | selectattr('status', 'equalto', 'in_transit') | list | length }}</p>
+    <p class="text-3xl font-bold text-yellow-600 mt-1">{{ in_transit_count }}</p>
+    <a href="/portal/parcels?status=in_transit" class="text-xs text-gray-400 hover:underline mt-1 inline-block">View →</a>
   </div>
   <div class="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
-    <p class="text-xs text-gray-400 uppercase tracking-wide font-medium">In Warehouse</p>
-    <p class="text-3xl font-bold text-green-600 mt-1">{{ parcels | selectattr('status', 'equalto', 'in_warehouse') | list | length }}</p>
+    <p class="text-xs text-gray-400 uppercase tracking-wide font-medium">Awaiting Review</p>
+    <p class="text-3xl font-bold {% if delivered_count > 0 %}text-sky-600{% else %}text-gray-400{% endif %} mt-1">{{ delivered_count }}</p>
+    <a href="/portal/parcels?status=delivered" class="text-xs text-gray-400 hover:underline mt-1 inline-block">View →</a>
   </div>
   <div class="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
-    <p class="text-xs text-gray-400 uppercase tracking-wide font-medium">Reports</p>
-    <p class="text-3xl font-bold text-indigo-600 mt-1">{{ reports | length }}</p>
+    <p class="text-xs text-gray-400 uppercase tracking-wide font-medium">In Negotiation</p>
+    <p class="text-3xl font-bold {% if negotiating_count > 0 %}text-amber-600{% else %}text-gray-400{% endif %} mt-1">{{ negotiating_count }}</p>
+    <a href="/portal/parcels?status=negotiating" class="text-xs text-gray-400 hover:underline mt-1 inline-block">View →</a>
   </div>
 </div>
 
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-  <!-- Recent parcels -->
-  <div class="bg-white rounded-xl border border-gray-100 shadow-sm">
-    <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-      <h3 class="text-sm font-semibold text-gray-700">Recent Parcels</h3>
-      <a href="/portal/parcels" class="text-xs text-indigo-600 hover:underline">All →</a>
-    </div>
-    <div class="divide-y divide-gray-50">
-      {% for p in parcels %}
-      <a href="/portal/parcels/{{ p.id }}" class="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors">
-        <div>
-          <p class="text-sm font-mono font-medium text-gray-800">{{ p.tracking_number }}</p>
-          <p class="text-xs text-gray-400">{{ p.description or "—" }}</p>
-        </div>
+<!-- Needs attention -->
+{% if needs_action %}
+<div class="bg-amber-50 border border-amber-200 rounded-xl mb-6">
+  <div class="px-5 py-4 border-b border-amber-200 flex items-center gap-2">
+    <svg class="w-4 h-4 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 3l9 16H3L12 3z"/></svg>
+    <h3 class="text-sm font-semibold text-amber-800">Needs Your Attention ({{ needs_action|length }})</h3>
+  </div>
+  <div class="divide-y divide-amber-100">
+    {% for p in needs_action %}
+    <a href="/portal/parcels/{{ p.id }}" class="flex items-center justify-between px-5 py-3 hover:bg-amber-100 transition-colors">
+      <div class="min-w-0">
+        <p class="text-sm font-mono font-semibold text-gray-800 truncate">{{ p.tracking_number }}</p>
+        {% if p.title %}
+        <p class="text-xs text-gray-500 truncate">{{ p.title }}</p>
+        {% elif p.asin %}
+        <p class="text-xs text-gray-400 font-mono">{{ p.asin }}</p>
+        {% endif %}
+      </div>
+      <div class="flex items-center gap-3 ml-3 shrink-0">
         <span class="text-xs px-2 py-1 rounded-full font-medium {{ STATUS_COLORS.get(p.status, '') }}">
           {{ STATUS_LABELS.get(p.status, p.status) }}
         </span>
-      </a>
-      {% else %}
-      <p class="px-5 py-8 text-sm text-gray-400 text-center">No parcels yet</p>
-      {% endfor %}
-    </div>
+        {% if p.status == 'negotiating' and p.negotiations %}
+        <span class="text-xs text-amber-700 font-medium">Admin responded</span>
+        {% endif %}
+        <svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+      </div>
+    </a>
+    {% endfor %}
   </div>
+</div>
+{% endif %}
 
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
   <!-- Recent reports -->
   <div class="bg-white rounded-xl border border-gray-100 shadow-sm">
     <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -68,6 +83,41 @@
       {% else %}
       <p class="px-5 py-8 text-sm text-gray-400 text-center">No reports yet</p>
       {% endfor %}
+    </div>
+  </div>
+
+  <!-- Quick links -->
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+    <h3 class="text-sm font-semibold text-gray-700 mb-4">Quick Actions</h3>
+    <div class="space-y-2">
+      <a href="/portal/parcels?status=delivered" class="flex items-center gap-3 p-3 rounded-lg bg-sky-50 hover:bg-sky-100 transition-colors">
+        <span class="text-lg">📬</span>
+        <div>
+          <p class="text-sm font-medium text-sky-800">Review Delivered Parcels</p>
+          <p class="text-xs text-sky-600">{{ delivered_count }} waiting</p>
+        </div>
+      </a>
+      <a href="/portal/parcels?status=negotiating" class="flex items-center gap-3 p-3 rounded-lg bg-amber-50 hover:bg-amber-100 transition-colors">
+        <span class="text-lg">💬</span>
+        <div>
+          <p class="text-sm font-medium text-amber-800">Open Negotiations</p>
+          <p class="text-xs text-amber-600">{{ negotiating_count }} in progress</p>
+        </div>
+      </a>
+      <a href="/portal/deposits" class="flex items-center gap-3 p-3 rounded-lg bg-green-50 hover:bg-green-100 transition-colors">
+        <span class="text-lg">💰</span>
+        <div>
+          <p class="text-sm font-medium text-green-800">Add Deposit</p>
+          <p class="text-xs text-green-600">Current balance: ${{ "%.2f"|format(client.balance or 0) }}</p>
+        </div>
+      </a>
+      <a href="/portal/parcels?status=in_transit" class="flex items-center gap-3 p-3 rounded-lg bg-yellow-50 hover:bg-yellow-100 transition-colors">
+        <span class="text-lg">🚚</span>
+        <div>
+          <p class="text-sm font-medium text-yellow-800">Parcels In Transit</p>
+          <p class="text-xs text-yellow-600">{{ in_transit_count }} on the way</p>
+        </div>
+      </a>
     </div>
   </div>
 </div>

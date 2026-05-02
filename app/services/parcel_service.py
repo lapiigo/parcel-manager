@@ -34,7 +34,8 @@ from app.models.parcel import Parcel, ParcelStatusLog
 VALID_TRANSITIONS: dict[str, list[str]] = {
     "unidentified":       ["in_transit", "forwarding", "ignored"],
     "in_transit":         ["delivered", "ignored"],
-    "delivered":          ["ready_to_pay", "forwarding", "return_to_supplier"],
+    "delivered":          ["ready_to_pay", "forwarding", "return_to_supplier", "negotiating"],
+    "negotiating":        ["ready_to_pay", "return_to_supplier"],
     "ready_to_pay":       ["paid", "return_to_supplier"],
     "paid":               ["sold"],
     "forwarding":         [],
@@ -51,6 +52,7 @@ STATUS_LABELS: dict[str, str] = {
     "unidentified":       "Unidentified",
     "in_transit":         "In Transit",
     "delivered":          "Delivered",
+    "negotiating":        "In Negotiation",
     "ready_to_pay":       "Ready to Pay",
     "paid":               "Paid",
     "forwarding":         "Forwarding",
@@ -67,6 +69,7 @@ STATUS_COLORS: dict[str, str] = {
     "unidentified":       "bg-gray-100 text-gray-600",
     "in_transit":         "bg-yellow-100 text-yellow-800",
     "delivered":          "bg-sky-100 text-sky-800",
+    "negotiating":        "bg-amber-100 text-amber-800",
     "ready_to_pay":       "bg-green-100 text-green-800",
     "paid":               "bg-emerald-100 text-emerald-800",
     "forwarding":         "bg-blue-100 text-blue-800",
@@ -80,7 +83,7 @@ STATUS_COLORS: dict[str, str] = {
 }
 
 ALL_STATUSES = [
-    "unidentified", "in_transit", "delivered",
+    "unidentified", "in_transit", "delivered", "negotiating",
     "ready_to_pay", "paid", "forwarding",
     "return_to_supplier", "sold", "ignored",
 ]

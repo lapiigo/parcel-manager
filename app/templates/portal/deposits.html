@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Deposits — Parcel Manager{% endblock %}
+{% block heading %}My Deposits{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+  <!-- Add deposit form -->
+  <div class="lg:col-span-1">
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+      <h3 class="text-sm font-semibold text-gray-700 mb-4">Add a Deposit</h3>
+      <p class="text-xs text-gray-400 mb-4">Submit your payment info — after confirmation, it will be credited to your balance.</p>
+
+      <form method="post" action="/portal/deposits" enctype="multipart/form-data" class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Amount (USD) <span class="text-red-500">*</span></label>
+          <div class="relative">
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+            <input type="number" name="amount" step="0.01" min="0.01" required placeholder="100.00"
+                   class="w-full pl-7 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Transaction ID / Reference</label>
+          <input type="text" name="transaction_ref" placeholder="e.g. TXN-12345678"
+                 class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Screenshot</label>
+          <p class="text-xs text-gray-400 mb-1">Attach a screenshot of your payment confirmation</p>
+          <input type="file" name="screenshot" accept="image/*"
+                 class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" />
+        </div>
+
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+          <textarea name="notes" rows="2" placeholder="Any additional info..."
+                    class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"></textarea>
+        </div>
+
+        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2.5 rounded-lg transition-colors">
+          Submit Deposit
+        </button>
+      </form>
+    </div>
+
+    <!-- Balance summary -->
+    <div class="mt-4 bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+      <p class="text-xs text-gray-400 uppercase tracking-wide font-medium mb-2">Current Balance</p>
+      <p class="text-3xl font-bold {% if client.balance >= 0 %}text-green-600{% else %}text-red-600{% endif %}">${{ "%.2f"|format(client.balance or 0) }}</p>
+      <p class="text-xs text-gray-400 mt-2">Confirmed deposits: ${{ "%.2f"|format(confirmed_total) }}</p>
+    </div>
+  </div>
+
+  <!-- Deposits history -->
+  <div class="lg:col-span-2">
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm">
+      <div class="px-5 py-4 border-b border-gray-100">
+        <h3 class="text-sm font-semibold text-gray-700">Deposit History</h3>
+      </div>
+
+      {% if deposits %}
+      <div class="divide-y divide-gray-50">
+        {% for d in deposits %}
+        <div class="px-5 py-4 flex items-start justify-between gap-4">
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="text-base font-bold {% if d.status == 'confirmed' %}text-green-600{% elif d.status == 'rejected' %}text-red-500{% else %}text-gray-700{% endif %}">
+                ${{ "%.2f"|format(d.amount) }}
+              </span>
+              <span class="text-xs px-2 py-0.5 rounded-full font-medium
+                {% if d.status == 'confirmed' %}bg-green-100 text-green-700
+                {% elif d.status == 'rejected' %}bg-red-100 text-red-600
+                {% else %}bg-amber-100 text-amber-700{% endif %}">
+                {{ d.status | capitalize }}
+              </span>
+            </div>
+            {% if d.transaction_ref %}
+            <p class="text-xs text-gray-500 mt-1 font-mono">{{ d.transaction_ref }}</p>
+            {% endif %}
+            {% if d.notes %}
+            <p class="text-xs text-gray-400 mt-0.5">{{ d.notes }}</p>
+            {% endif %}
+            <p class="text-xs text-gray-300 mt-1">
+              <time class="local-time" datetime="{{ d.created_at.strftime('%Y-%m-%dT%H:%M:%SZ') if d.created_at else '' }}">
+                {{ d.created_at.strftime('%d.%m.%Y %H:%M') if d.created_at else '' }}
+              </time>
+              {% if d.confirmed_by %} · confirmed by {{ d.confirmed_by }}{% endif %}
+            </p>
+          </div>
+          {% if d.screenshot_path %}
+          <a href="{{ d.screenshot_path }}" target="_blank" class="shrink-0">
+            <img src="{{ d.screenshot_path }}" alt="screenshot" class="w-14 h-14 object-cover rounded-lg border border-gray-100 hover:opacity-80 transition-opacity" />
+          </a>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="px-5 py-12 text-center text-gray-400">
+        <p class="text-2xl mb-2">💳</p>
+        <p class="text-sm">No deposits yet</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+{% endblock %}

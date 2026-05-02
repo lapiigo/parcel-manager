@@ -109,6 +109,10 @@ def startup():
         ("parcels", "forwarded_from_id", "INTEGER"),
         ("parcels", "is_returned", "INTEGER DEFAULT 0"),
         ("parcels", "returned_at", "DATETIME"),
+        ("parcels", "client_action", "VARCHAR(50)"),
+        ("parcels", "client_discount_proposed", "REAL"),
+        ("parcels", "client_notes", "TEXT"),
+        ("parcels", "client_reviewed_at", "DATETIME"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in new_columns:

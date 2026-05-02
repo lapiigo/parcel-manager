@@ -4,6 +4,23 @@ from sqlalchemy.sql import func
 from app.database import Base
 
 
+class ClientDeposit(Base):
+    __tablename__ = "client_deposits"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    amount = Column(Float, nullable=False)
+    transaction_ref = Column(String(255), nullable=True)
+    screenshot_path = Column(String(500), nullable=True)
+    notes = Column(Text, nullable=True)
+    status = Column(String(20), default="pending")   # pending | confirmed
+    created_at = Column(DateTime, server_default=func.now())
+    confirmed_at = Column(DateTime, nullable=True)
+    confirmed_by = Column(String(100), nullable=True)
+
+    client = relationship("Client", back_populates="deposits")
+
+
 class Client(Base):
     __tablename__ = "clients"
 
@@ -32,3 +49,5 @@ class Client(Base):
                                   order_by="WishlistItem.created_at")
     shipx_addresses = relationship("ClientShipXAddress", back_populates="client", cascade="all, delete-orphan")
     housecargo_supplier = relationship("Supplier", foreign_keys=[housecargo_supplier_id])
+    deposits = relationship("ClientDeposit", back_populates="client", cascade="all, delete-orphan",
+                            order_by="ClientDeposit.created_at.desc()")
