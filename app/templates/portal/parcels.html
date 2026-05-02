@@ -50,7 +50,7 @@
   <form method="get" action="/portal/parcels" class="flex gap-2 items-center px-4 py-3 border-b border-gray-100">
     {% if active_status %}<input type="hidden" name="status" value="{{ active_status }}" />{% endif %}
     <input type="text" name="q" value="{{ q }}"
-           placeholder="Tracking, ASIN or Order ID…"
+           placeholder="Tracking number or ASIN…"
            class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
     <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm px-4 py-2 rounded-lg transition-colors shrink-0">Search</button>
     {% if q %}<a href="/portal/parcels{% if active_status %}?status={{ active_status }}{% endif %}" class="text-sm text-gray-400 hover:text-gray-600 px-1 py-2">✕</a>{% endif %}

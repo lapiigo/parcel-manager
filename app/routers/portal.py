@@ -123,8 +123,7 @@ def portal_parcels(
             q_upper = q.strip().upper()
             query = query.filter(
                 Parcel.tracking_number.contains(q.strip()) |
-                (Parcel.asin == q_upper) |
-                Parcel.external_order_id.contains(q.strip())
+                (Parcel.asin == q_upper)
             )
         parcels = query.order_by(Parcel.payment_report_date.desc(), Parcel.created_at.desc()).all()
     else:
@@ -138,8 +137,7 @@ def portal_parcels(
             q_upper = q.strip().upper()
             query = query.filter(
                 Parcel.tracking_number.contains(q.strip()) |
-                (Parcel.asin == q_upper) |
-                Parcel.external_order_id.contains(q.strip())
+                (Parcel.asin == q_upper)
             )
         parcels = query.order_by(Parcel.created_at.desc()).all()
 
