@@ -107,6 +107,7 @@ def portal_dashboard(
 def portal_parcels(
     request: Request,
     status: str = "",
+    q: str = "",
     db: Session = Depends(get_db),
     current_user=Depends(require_client),
 ):
@@ -117,8 +118,15 @@ def portal_parcels(
     base = db.query(Parcel).filter(Parcel.client_id == client.id)
 
     if status == "archive":
-        parcels = (base.filter(Parcel.payment_report_date.isnot(None))
-                   .order_by(Parcel.payment_report_date.desc(), Parcel.created_at.desc()).all())
+        query = base.filter(Parcel.payment_report_date.isnot(None))
+        if q:
+            q_upper = q.strip().upper()
+            query = query.filter(
+                Parcel.tracking_number.contains(q.strip()) |
+                (Parcel.asin == q_upper) |
+                Parcel.external_order_id.contains(q.strip())
+            )
+        parcels = query.order_by(Parcel.payment_report_date.desc(), Parcel.created_at.desc()).all()
     else:
         query = base.filter(
             Parcel.payment_report_date.is_(None),
@@ -126,6 +134,13 @@ def portal_parcels(
         )
         if status:
             query = query.filter(Parcel.status == status)
+        if q:
+            q_upper = q.strip().upper()
+            query = query.filter(
+                Parcel.tracking_number.contains(q.strip()) |
+                (Parcel.asin == q_upper) |
+                Parcel.external_order_id.contains(q.strip())
+            )
         parcels = query.order_by(Parcel.created_at.desc()).all()
 
     counts = {}
@@ -143,6 +158,7 @@ def portal_parcels(
             "parcels": parcels,
             "active_status": status,
             "counts": counts,
+            "q": q,
             "STATUS_LABELS": STATUS_LABELS,
             "STATUS_COLORS": STATUS_COLORS,
         },
