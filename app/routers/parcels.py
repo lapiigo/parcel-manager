@@ -416,6 +416,21 @@ async def parcel_create(
         except ValueError:
             pass
 
+        # Estimated cost if ASIN known and not manually provided
+        title_val = None
+        if asin_val and price_val is None:
+            try:
+                from app.services import keepa_service
+                client_obj = db.query(Client).filter(Client.id == resolved_client_id).first() if resolved_client_id else None
+                coeff = (client_obj.cost_coefficient if client_obj and client_obj.cost_coefficient is not None else 0.45)
+                result = keepa_service.get_estimated_cost(asin_val, coeff)
+                if result.cost is not None:
+                    price_val = float(result.cost)
+                if result.title:
+                    title_val = result.title
+            except Exception:
+                pass
+
         parcel = Parcel(
             external_order_id=external_order_id.strip() or None,
             tracking_number=track,
@@ -423,6 +438,7 @@ async def parcel_create(
             client_id=resolved_client_id,
             qty=qty_val,
             asin=asin_val,
+            title=title_val,
             purchase_price=price_val,
             arrived_at=arrived_at_dt,
             notes=notes.strip() or None,

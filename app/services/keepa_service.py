@@ -158,6 +158,14 @@ def get_title_only(asin: str) -> Optional[str]:
     return str(t).strip()[:500] if t else _TITLE_NOT_FOUND
 
 
+def get_estimated_cost(asin: str, multiplier: float = 0.45) -> KeepaResult:
+    """
+    Fetch current Amazon NEW price and calculate estimated cost.
+    Uses today's date — suitable for newly created parcels before delivery.
+    """
+    return get_product_info(asin, datetime.utcnow(), multiplier)
+
+
 # Keep backward-compat alias used in parcels router
 def calculate_cost(asin: str, delivery_dt: datetime, multiplier: float = 0.45) -> Optional[int]:
     """Returns cost as whole integer, or None."""

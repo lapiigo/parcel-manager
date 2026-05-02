@@ -53,16 +53,24 @@ def client_create(
     phone: str = Form(""),
     client_type: str = Form("direct"),
     balance: str = Form("0"),
+    cost_coefficient: str = Form(""),
     notes: str = Form(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
+    coeff = None
+    try:
+        if cost_coefficient.strip():
+            coeff = float(cost_coefficient)
+    except ValueError:
+        pass
     client = Client(
         name=name.strip(),
         email=email.strip() or None,
         phone=phone.strip() or None,
         type=client_type,
         balance=float(balance) if balance else 0.0,
+        cost_coefficient=coeff,
         notes=notes.strip() or None,
     )
     db.add(client)
@@ -133,17 +141,25 @@ def client_edit(
     phone: str = Form(""),
     client_type: str = Form("direct"),
     balance: str = Form("0"),
+    cost_coefficient: str = Form(""),
     notes: str = Form(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
     client = db.query(Client).filter(Client.id == client_id).first()
     if client:
+        coeff = None
+        try:
+            if cost_coefficient.strip():
+                coeff = float(cost_coefficient)
+        except ValueError:
+            pass
         client.name = name.strip()
         client.email = email.strip() or None
         client.phone = phone.strip() or None
         client.type = client_type
         client.balance = float(balance) if balance else 0.0
+        client.cost_coefficient = coeff
         client.notes = notes.strip() or None
         db.commit()
     return RedirectResponse(f"/clients/{client_id}", status_code=302)

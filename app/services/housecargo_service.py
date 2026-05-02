@@ -132,6 +132,15 @@ def _parse_delivery_date(dt_str: str | None) -> datetime | None:
     return None
 
 
+def _client_coeff(client_id, db) -> float:
+    """Return cost coefficient for a client, defaulting to 0.45."""
+    if not client_id:
+        return 0.45
+    from app.models.client import Client
+    c = db.query(Client).filter(Client.id == client_id).first()
+    return c.cost_coefficient if (c and c.cost_coefficient is not None) else 0.45
+
+
 def sync_transit_updates(supplier_id: int, username: str, password: str, db,
                          client_id: int | None = None) -> dict:
     """
@@ -153,7 +162,8 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
         Parcel.payment_report_date.is_(None),
     )
     if client_id is not None:
-        q = q.filter(Parcel.client_id == client_id)
+        # Also pick up unassigned parcels — manually created parcels may have no client_id yet
+        q = q.filter((Parcel.client_id == client_id) | Parcel.client_id.is_(None))
     transit_parcels = q.all()
     # One tracking may map to multiple parcels (multi-item shipment)
     by_tracking: dict[str, list[Parcel]] = {}
@@ -279,10 +289,15 @@ def sync(supplier_id: int, username: str, password: str, db,
 
                 if parcel is None:
                     title = None
+                    estimated_price = None
                     if asin:
                         try:
                             from app.services import keepa_service
-                            title = keepa_service.get_title_only(asin)
+                            coeff = _client_coeff(client_id, db)
+                            result = keepa_service.get_estimated_cost(asin, coeff)
+                            title = result.title or None
+                            if result.cost is not None:
+                                estimated_price = float(result.cost)
                         except Exception:
                             pass
                     parcel = Parcel(
@@ -293,6 +308,7 @@ def sync(supplier_id: int, username: str, password: str, db,
                         qty=qty,
                         asin=asin,
                         title=title,
+                        purchase_price=estimated_price,
                         arrived_at=None,
                         status="in_transit",
                         match_source="manual" if client_id else None,
@@ -367,10 +383,15 @@ def sync(supplier_id: int, username: str, password: str, db,
 
             if parcel is None:
                 title = None
+                estimated_price = None
                 if asin:
                     try:
                         from app.services import keepa_service
-                        title = keepa_service.get_title_only(asin)
+                        coeff = _client_coeff(client_id, db)
+                        result = keepa_service.get_estimated_cost(asin, coeff)
+                        title = result.title or None
+                        if result.cost is not None:
+                            estimated_price = float(result.cost)
                     except Exception:
                         pass
 
@@ -382,6 +403,7 @@ def sync(supplier_id: int, username: str, password: str, db,
                     qty=qty,
                     asin=asin,
                     title=title,
+                    purchase_price=estimated_price,
                     arrived_at=None,
                     status="in_transit",
                     match_source="manual" if client_id else None,

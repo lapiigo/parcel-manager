@@ -237,6 +237,15 @@ def _match_client_for_order(
     return wishlist_client_id, asin, "wishlist", is_wrong
 
 
+def _client_coeff(client_id, db) -> float:
+    """Return cost coefficient for a client, defaulting to 0.45."""
+    if not client_id:
+        return 0.45
+    from app.models.client import Client
+    c = db.query(Client).filter(Client.id == client_id).first()
+    return c.cost_coefficient if (c and c.cost_coefficient is not None) else 0.45
+
+
 def sync(supplier_id: int, username: str, password: str, db) -> dict:
     """
     Sync orders from shipx.cash — creates new parcels as in_transit only.
@@ -328,10 +337,15 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
 
                     if parcel is None:
                         title = None
+                        estimated_price = None
                         if final_asin:
                             try:
                                 from app.services import keepa_service
-                                title = keepa_service.get_title_only(final_asin)
+                                coeff = _client_coeff(matched_client_id, db)
+                                result = keepa_service.get_estimated_cost(final_asin, coeff)
+                                title = result.title or None
+                                if result.cost is not None:
+                                    estimated_price = float(result.cost)
                             except Exception:
                                 pass
                         parcel = Parcel(
@@ -342,6 +356,7 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
                             qty=qty,
                             asin=final_asin,
                             title=title,
+                            purchase_price=estimated_price,
                             arrived_at=None,
                             status=final_status,
                             match_source=match_source,
@@ -399,10 +414,15 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
 
         if parcel is None:
             title = None
+            estimated_price = None
             if final_asin:
                 try:
                     from app.services import keepa_service
-                    title = keepa_service.get_title_only(final_asin)
+                    coeff = _client_coeff(matched_client_id, db)
+                    result = keepa_service.get_estimated_cost(final_asin, coeff)
+                    title = result.title or None
+                    if result.cost is not None:
+                        estimated_price = float(result.cost)
                 except Exception:
                     pass
 
@@ -414,6 +434,7 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
                 qty=qty,
                 asin=final_asin,
                 title=title,
+                purchase_price=estimated_price,
                 arrived_at=None,
                 status=final_status,
                 match_source=match_source,
@@ -472,6 +493,7 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db) -> 
         )
         .all()
     )
+    # ShipX sync runs without client filter — all in_transit parcels for this supplier are checked
     by_tracking: dict[str, list[Parcel]] = {}
     for p in transit_parcels:
         by_tracking.setdefault(p.tracking_number, []).append(p)

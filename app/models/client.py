@@ -38,6 +38,10 @@ class Client(Base):
     housecargo_username = Column(String(255), nullable=True)
     housecargo_password_encrypted = Column(Text, nullable=True)
 
+    # Cost coefficient for estimated purchase price (e.g. 0.45 = 45% of Amazon price)
+    # None → use default 0.45
+    cost_coefficient = Column(Float, nullable=True)
+
     # Prime Prep integration: UUID of this client in prime-prep's system
     prime_prep_client_id = Column(String(36), nullable=True)
 

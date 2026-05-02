@@ -113,6 +113,7 @@ def startup():
         ("parcels", "client_discount_proposed", "REAL"),
         ("parcels", "client_notes", "TEXT"),
         ("parcels", "client_reviewed_at", "DATETIME"),
+        ("clients", "cost_coefficient", "REAL"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in new_columns:
