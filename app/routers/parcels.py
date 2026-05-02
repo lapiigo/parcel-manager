@@ -387,6 +387,8 @@ async def parcel_create(
             errors.append(f"Item {i+1}: tracking number is required")
             continue
 
+        asin_val = asin[i].strip().upper() or None
+
         # Deduplicate within this form submission
         combo = (track, asin_val)
         if combo in seen_combos:
