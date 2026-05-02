@@ -315,6 +315,7 @@ def report_confirm(
 @router.get("/new", response_class=HTMLResponse)
 def parcel_new(
     request: Request,
+    order_id: str = Query(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
@@ -324,14 +325,14 @@ def parcel_new(
     clients = db.query(Client).order_by(Client.name).all() if current_user.role == "super_admin" else []
     return templates.TemplateResponse(
         request,
-        "parcels/form.html",
+        "parcels/form_new.html",
         context={
             "current_user": current_user,
-            "parcel": None,
             "suppliers": suppliers,
             "clients": clients,
             "can": can,
-            "error": ""
+            "errors": [],
+            "prefill_order_id": order_id,
         },
     )
 
@@ -340,33 +341,19 @@ def parcel_new(
 async def parcel_create(
     request: Request,
     external_order_id: str = Form(""),
-    tracking_number: str = Form(...),
+    tracking_number: List[str] = Form(default=[]),
     supplier_id: str = Form(""),
     client_id: str = Form(""),
-    qty: str = Form("1"),
-    asin: str = Form(""),
-    purchase_price: str = Form(""),
+    qty: List[str] = Form(default=[]),
+    asin: List[str] = Form(default=[]),
+    purchase_price: List[str] = Form(default=[]),
     arrived_at: str = Form(""),
     notes: str = Form(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
-    existing = db.query(Parcel).filter(Parcel.tracking_number == tracking_number).first()
-    if existing:
-        suppliers = db.query(Supplier).order_by(Supplier.name).all()
-        clients = db.query(Client).order_by(Client.name).all() if current_user.role == "super_admin" else []
-        return templates.TemplateResponse(
-            request,
-            "parcels/form.html",
-            context={
-                "current_user": current_user,
-                "parcel": None,
-                "suppliers": suppliers,
-                "clients": clients,
-                "can": can,
-                "error": f"Tracking number '{tracking_number}' already exists"
-            },
-        )
+    suppliers = db.query(Supplier).order_by(Supplier.name).all()
+    clients = db.query(Client).order_by(Client.name).all() if current_user.role == "super_admin" else []
 
     arrived_at_dt = None
     if arrived_at:
@@ -375,32 +362,88 @@ async def parcel_create(
         except ValueError:
             pass
 
-    # Determine company: super_admin picks from form, others inherit their own
     if current_user.role == "super_admin":
         resolved_client_id = int(client_id) if client_id else None
     else:
         resolved_client_id = current_user.client_id
 
-    parcel = Parcel(
-        external_order_id=external_order_id.strip() or None,
-        tracking_number=tracking_number.strip(),
-        supplier_id=int(supplier_id) if supplier_id else None,
-        client_id=resolved_client_id,
-        qty=int(qty) if qty else 1,
-        asin=asin.strip().upper() or None,
-        purchase_price=float(purchase_price) if purchase_price else None,
-        arrived_at=arrived_at_dt,
-        notes=notes.strip() or None,
-        status="in_transit",
-    )
-    db.add(parcel)
+    # Pad shorter lists so all have same length
+    n = max(len(tracking_number), 1)
+    def _pad(lst, length, default=""):
+        return list(lst) + [default] * (length - len(lst))
+
+    tracking_number = _pad(tracking_number, n)
+    asin            = _pad(asin, n)
+    qty             = _pad(qty, n, "1")
+    purchase_price  = _pad(purchase_price, n)
+
+    errors = []
+    created_ids = []
+
+    for i in range(n):
+        track = tracking_number[i].strip()
+        if not track:
+            errors.append(f"Item {i+1}: tracking number is required")
+            continue
+
+        existing = db.query(Parcel).filter(Parcel.tracking_number == track).first()
+        if existing:
+            errors.append(f"Item {i+1}: tracking '{track}' already exists (parcel #{existing.id})")
+            continue
+
+        asin_val = asin[i].strip().upper() or None
+        qty_val  = int(qty[i]) if qty[i].strip().isdigit() else 1
+        price_val = None
+        try:
+            if purchase_price[i].strip():
+                price_val = float(purchase_price[i])
+        except ValueError:
+            pass
+
+        parcel = Parcel(
+            external_order_id=external_order_id.strip() or None,
+            tracking_number=track,
+            supplier_id=int(supplier_id) if supplier_id else None,
+            client_id=resolved_client_id,
+            qty=qty_val,
+            asin=asin_val,
+            purchase_price=price_val,
+            arrived_at=arrived_at_dt,
+            notes=notes.strip() or None,
+            status="in_transit",
+        )
+        db.add(parcel)
+        db.flush()
+        _log(db, parcel.id, "created",
+             f"Tracking: {parcel.tracking_number}" + (f" | Order: {parcel.external_order_id}" if parcel.external_order_id else ""),
+             user=current_user)
+        created_ids.append(parcel.id)
+
     db.commit()
-    db.refresh(parcel)
-    _log(db, parcel.id, "created",
-         f"Tracking: {parcel.tracking_number}" + (f" | Order: {parcel.external_order_id}" if parcel.external_order_id else ""),
-         user=current_user)
-    db.commit()
-    return RedirectResponse(f"/parcels/{parcel.id}", status_code=302)
+
+    if errors and not created_ids:
+        # All failed — show form with errors
+        return templates.TemplateResponse(
+            request,
+            "parcels/form_new.html",
+            context={
+                "current_user": current_user,
+                "suppliers": suppliers,
+                "clients": clients,
+                "can": can,
+                "errors": errors,
+                "prefill_order_id": external_order_id,
+            },
+        )
+
+    # At least some created — redirect to first parcel (or list if order_id present)
+    if external_order_id.strip() and len(created_ids) > 1:
+        import urllib.parse
+        return RedirectResponse(
+            f"/parcels?status=in_transit&q={urllib.parse.quote(external_order_id.strip())}",
+            status_code=302,
+        )
+    return RedirectResponse(f"/parcels/{created_ids[0]}", status_code=302)
 
 
 @router.get("/{parcel_id}", response_class=HTMLResponse)
