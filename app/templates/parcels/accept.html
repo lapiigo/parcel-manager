@@ -25,59 +25,110 @@
       {% endif %}
     </div>
 
-    <form method="post" action="/parcels/{{ parcel.id }}/accept" x-data="{ cond: 'ok' }">
+    <form method="post" action="/parcels/{{ parcel.id }}/accept"
+          x-data="{ cond: 'ok' }">
 
       <p class="text-sm font-semibold text-gray-700 mb-3">Parcel condition</p>
 
-      <div class="flex gap-3 mb-5">
-        <label class="flex-1 cursor-pointer">
+      <div class="grid grid-cols-2 gap-3 mb-5">
+        <!-- All OK -->
+        <label class="cursor-pointer">
           <input type="radio" name="condition" value="ok" x-model="cond" class="sr-only" />
           <div :class="cond === 'ok' ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'"
-               class="border-2 rounded-xl p-4 text-center transition-colors">
+               class="border-2 rounded-xl p-4 text-center transition-colors h-full">
             <p class="text-2xl mb-1">✅</p>
             <p class="text-sm font-semibold">All OK</p>
-            <p class="text-xs mt-0.5">Cost calculated automatically</p>
+            <p class="text-xs mt-0.5 opacity-70">Auto-calculate cost</p>
           </div>
         </label>
-        <label class="flex-1 cursor-pointer">
-          <input type="radio" name="condition" value="problem" x-model="cond" class="sr-only" />
-          <div :class="cond === 'problem' ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'"
-               class="border-2 rounded-xl p-4 text-center transition-colors">
-            <p class="text-2xl mb-1">⚠️</p>
-            <p class="text-sm font-semibold">Has Problems</p>
-            <p class="text-xs mt-0.5">Cost set to $0</p>
+
+        <!-- Damaged -->
+        <label class="cursor-pointer">
+          <input type="radio" name="condition" value="damaged" x-model="cond" class="sr-only" />
+          <div :class="cond === 'damaged' ? 'border-orange-400 bg-orange-50 text-orange-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'"
+               class="border-2 rounded-xl p-4 text-center transition-colors h-full">
+            <p class="text-2xl mb-1">🟠</p>
+            <p class="text-sm font-semibold">Damaged</p>
+            <p class="text-xs mt-0.5 opacity-70">Partial damage, sellable</p>
+          </div>
+        </label>
+
+        <!-- Very Damaged -->
+        <label class="cursor-pointer">
+          <input type="radio" name="condition" value="very_damaged" x-model="cond" class="sr-only" />
+          <div :class="cond === 'very_damaged' ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'"
+               class="border-2 rounded-xl p-4 text-center transition-colors h-full">
+            <p class="text-2xl mb-1">🔴</p>
+            <p class="text-sm font-semibold">Very Damaged</p>
+            <p class="text-xs mt-0.5 opacity-70">Cannot sell as-is</p>
+          </div>
+        </label>
+
+        <!-- Wrong Item -->
+        <label class="cursor-pointer">
+          <input type="radio" name="condition" value="wrong_item" x-model="cond" class="sr-only" />
+          <div :class="cond === 'wrong_item' ? 'border-purple-400 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'"
+               class="border-2 rounded-xl p-4 text-center transition-colors h-full">
+            <p class="text-2xl mb-1">📦</p>
+            <p class="text-sm font-semibold">Wrong Item</p>
+            <p class="text-xs mt-0.5 opacity-70">Different product arrived</p>
           </div>
         </label>
       </div>
 
-      <!-- Problem fields -->
-      <div x-show="cond === 'problem'" x-cloak class="border border-red-100 bg-red-50 rounded-lg p-4 mb-5 space-y-3">
-        <p class="text-xs font-semibold text-red-700 uppercase tracking-wider">Override (optional)</p>
-        <p class="text-xs text-red-600">If a different item arrived that you want to sell, enter the correct ASIN and quantity.</p>
+      <!-- Wrong item fields -->
+      <div x-show="cond === 'wrong_item'" x-cloak
+           class="border border-purple-100 bg-purple-50 rounded-lg p-4 mb-4 space-y-3">
+        <p class="text-xs font-semibold text-purple-700 uppercase tracking-wider">Override (optional)</p>
+        <p class="text-xs text-purple-600">Enter the ASIN and qty of what actually arrived.</p>
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs text-gray-600 mb-1">Correct ASIN</label>
             <input type="text" name="asin_override" maxlength="20"
                    placeholder="{{ parcel.asin or 'e.g. B08N5WRWNW' }}"
-                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300" />
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300" />
           </div>
           <div>
             <label class="block text-xs text-gray-600 mb-1">Correct Qty</label>
             <input type="number" name="qty_override" min="1"
                    placeholder="{{ parcel.qty or 1 }}"
-                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-300" />
+                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300" />
           </div>
         </div>
-        <p class="text-xs text-red-500">Cost will be set to $0. You can recalculate after updating the correct ASIN.</p>
+      </div>
+
+      <!-- Notes (visible for damaged / very_damaged / wrong_item, optional for ok) -->
+      <div class="mb-5">
+        <label class="block text-sm font-medium text-gray-700 mb-1">
+          Notes
+          <span x-show="cond === 'ok'" class="font-normal text-gray-400 text-xs ml-1">optional</span>
+          <span x-show="cond !== 'ok'" class="font-normal text-gray-400 text-xs ml-1">describe the issue</span>
+        </label>
+        <textarea name="accept_notes" rows="2"
+                  class="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  placeholder="e.g. corner crushed, liquid leak, packaging intact…"></textarea>
       </div>
 
       <div class="flex gap-3">
         <button type="submit"
-                :class="cond === 'ok' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'"
+                :class="{
+                  'bg-green-600 hover:bg-green-700':  cond === 'ok',
+                  'bg-orange-500 hover:bg-orange-600': cond === 'damaged',
+                  'bg-red-600 hover:bg-red-700':       cond === 'very_damaged',
+                  'bg-purple-600 hover:bg-purple-700': cond === 'wrong_item',
+                }"
                 class="text-white font-medium px-6 py-2.5 rounded-lg text-sm transition-colors">
-          <span x-text="cond === 'ok' ? 'Accept & Calculate Cost' : 'Accept with Problems'">Accept</span>
+          <span x-text="{
+            ok:           'Accept & Calculate Cost',
+            damaged:      'Accept — Damaged',
+            very_damaged: 'Accept — Very Damaged',
+            wrong_item:   'Accept — Wrong Item',
+          }[cond] || 'Accept'"></span>
         </button>
-        <a href="/parcels/{{ parcel.id }}" class="border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium px-6 py-2.5 rounded-lg text-sm transition-colors">Cancel</a>
+        <a href="/parcels/{{ parcel.id }}"
+           class="border border-gray-300 text-gray-600 hover:bg-gray-50 font-medium px-6 py-2.5 rounded-lg text-sm transition-colors">
+          Cancel
+        </a>
       </div>
 
     </form>

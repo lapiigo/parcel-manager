@@ -379,6 +379,7 @@ async def parcel_create(
 
     errors = []
     created_ids = []
+    seen_combos: set[tuple] = set()  # (tracking, asin) pairs submitted in this form
 
     for i in range(n):
         track = tracking_number[i].strip()
@@ -386,12 +387,25 @@ async def parcel_create(
             errors.append(f"Item {i+1}: tracking number is required")
             continue
 
-        existing = db.query(Parcel).filter(Parcel.tracking_number == track).first()
+        # Deduplicate within this form submission
+        combo = (track, asin_val)
+        if combo in seen_combos:
+            errors.append(f"Item {i+1}: duplicate tracking+ASIN — skipped")
+            continue
+        seen_combos.add(combo)
+
+        # Check DB: allow same tracking if different ASIN (multi-item shipment)
+        if asin_val:
+            existing = db.query(Parcel).filter(
+                Parcel.tracking_number == track,
+                Parcel.asin == asin_val,
+            ).first()
+        else:
+            existing = db.query(Parcel).filter(Parcel.tracking_number == track).first()
         if existing:
-            errors.append(f"Item {i+1}: tracking '{track}' already exists (parcel #{existing.id})")
+            errors.append(f"Item {i+1}: tracking '{track}'" + (f" / ASIN {asin_val}" if asin_val else "") + f" already exists (parcel #{existing.id})")
             continue
 
-        asin_val = asin[i].strip().upper() or None
         qty_val  = int(qty[i]) if qty[i].strip().isdigit() else 1
         price_val = None
         try:
@@ -767,55 +781,75 @@ def parcel_accept_page(
 def parcel_accept(
     request: Request,
     parcel_id: int,
-    condition: str = Form(...),        # "ok" | "problem"
+    condition: str = Form(...),        # "ok" | "damaged" | "very_damaged" | "wrong_item"
     asin_override: str = Form(""),
     qty_override: str = Form(""),
+    accept_notes: str = Form(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
-    import urllib.parse
     parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
     if not parcel:
         return RedirectResponse("/parcels", status_code=302)
 
-    if condition == "problem":
-        # Update ASIN/qty if provided
+    notes_text = accept_notes.strip() or None
+
+    if condition == "wrong_item":
         if asin_override.strip():
             parcel.asin = asin_override.strip().upper()
-            parcel.title = None  # will be fetched fresh below if ASIN changed
+            parcel.title = None
         if qty_override.strip():
             try:
                 parcel.qty = int(qty_override.strip())
             except ValueError:
                 pass
-
-    # Transition to ready_to_pay
-    transition_parcel(parcel, "ready_to_pay", db,
-                      changed_by=current_user.full_name or current_user.username,
-                      notes="problem" if condition == "problem" else "")
-
-    if condition == "problem":
         parcel.purchase_price = 0
         parcel.amazon_price = None
-        _log(db, parcel_id, "accepted", "Condition: problem", user=current_user)
+        if notes_text:
+            parcel.notes = notes_text
+        transition_parcel(parcel, "ready_to_pay", db,
+                          changed_by=current_user.full_name or current_user.username,
+                          notes="wrong item")
+        _log(db, parcel_id, "accepted",
+             "Condition: wrong item" + (f" | {notes_text}" if notes_text else ""),
+             user=current_user)
+        db.commit()
+        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+    if condition in ("damaged", "very_damaged"):
+        parcel.purchase_price = 0
+        parcel.amazon_price = None
+        if notes_text:
+            parcel.notes = notes_text
+        transition_parcel(parcel, "ready_to_pay", db,
+                          changed_by=current_user.full_name or current_user.username,
+                          notes=condition.replace("_", " "))
+        _log(db, parcel_id, "accepted",
+             f"Condition: {condition.replace('_', ' ')}" + (f" | {notes_text}" if notes_text else ""),
+             user=current_user)
         db.commit()
         return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
     # condition == "ok" → auto-calculate cost from Keepa
-    if not parcel.asin or not parcel.arrived_at:
-        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+    transition_parcel(parcel, "ready_to_pay", db,
+                      changed_by=current_user.full_name or current_user.username)
+    if notes_text:
+        parcel.notes = notes_text
 
-    try:
-        result = keepa_service.get_product_info(parcel.asin, parcel.arrived_at)
-        if result.title:
-            parcel.title = result.title
-        if result.cost is not None:
-            parcel.amazon_price = result.amazon_price
-            parcel.purchase_price = result.cost
-    except keepa_service.KeepaError:
-        pass  # cost stays None; user can recalculate manually
+    if parcel.asin and parcel.arrived_at:
+        try:
+            result = keepa_service.get_product_info(parcel.asin, parcel.arrived_at)
+            if result.title:
+                parcel.title = result.title
+            if result.cost is not None:
+                parcel.amazon_price = result.amazon_price
+                parcel.purchase_price = result.cost
+        except keepa_service.KeepaError:
+            pass
 
-    _log(db, parcel_id, "accepted", "Condition: ok", user=current_user)
+    _log(db, parcel_id, "accepted",
+         "Condition: ok" + (f" | {notes_text}" if notes_text else ""),
+         user=current_user)
     db.commit()
     return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
