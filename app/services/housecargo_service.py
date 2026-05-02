@@ -155,7 +155,10 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
     if client_id is not None:
         q = q.filter(Parcel.client_id == client_id)
     transit_parcels = q.all()
-    by_tracking: dict[str, Parcel] = {p.tracking_number: p for p in transit_parcels}
+    # One tracking may map to multiple parcels (multi-item shipment)
+    by_tracking: dict[str, list[Parcel]] = {}
+    for p in transit_parcels:
+        by_tracking.setdefault(p.tracking_number, []).append(p)
 
     if not by_tracking:
         return {"updated": 0, "skipped": 0, "errors": []}
@@ -167,35 +170,35 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
         outbound_tracks = _outbound_tracks(d.get("tracks") or [])
         for track_obj in outbound_tracks:
             tracking = track_obj["number"]
-            parcel = by_tracking.get(tracking)
-            if parcel is None:
+            parcels_for_track = by_tracking.get(tracking, [])
+            if not parcels_for_track:
                 continue
 
             track_status = (track_obj.get("status") or "").strip()
             track_delivered_at = _parse_delivery_date(track_obj.get("deliveryDate"))
             is_delivered = "deliver" in track_status.lower()
 
-            if is_delivered and track_delivered_at:
-                parcel.arrived_at = track_delivered_at
-                parcel.status = "delivered"
+            for parcel in parcels_for_track:
+                if is_delivered and track_delivered_at:
+                    parcel.arrived_at = track_delivered_at
+                    parcel.status = "delivered"
 
-                # Auto-calculate cost from Keepa if ASIN is set and cost not already present
-                if parcel.asin and parcel.purchase_price is None:
-                    try:
-                        from app.services import keepa_service
-                        result = keepa_service.get_product_info(parcel.asin, track_delivered_at)
-                        if result.amazon_price is not None:
-                            parcel.amazon_price = result.amazon_price
-                        if result.cost is not None:
-                            parcel.purchase_price = float(result.cost)
-                        if result.title and not parcel.title:
-                            parcel.title = result.title
-                    except Exception as exc:
-                        errors.append(f"Keepa error for {parcel.tracking_number} ({parcel.asin}): {exc}")
+                    if parcel.asin and parcel.purchase_price is None:
+                        try:
+                            from app.services import keepa_service
+                            result = keepa_service.get_product_info(parcel.asin, track_delivered_at)
+                            if result.amazon_price is not None:
+                                parcel.amazon_price = result.amazon_price
+                            if result.cost is not None:
+                                parcel.purchase_price = float(result.cost)
+                            if result.title and not parcel.title:
+                                parcel.title = result.title
+                        except Exception as exc:
+                            errors.append(f"Keepa error for {parcel.tracking_number} ({parcel.asin}): {exc}")
 
-                updated += 1
-            else:
-                skipped += 1
+                    updated += 1
+                else:
+                    skipped += 1
 
     db.commit()
     return {"updated": updated, "skipped": skipped, "errors": errors}
@@ -234,7 +237,87 @@ def sync(supplier_id: int, username: str, password: str, db,
 
         n = len(outbound_tracks)
 
-        # Total qty (from all items combined)
+        # ── 1 track + multiple items → one Parcel per item ──────────────────
+        if n == 1 and len(items) > 1:
+            track_obj = outbound_tracks[0]
+            tracking = track_obj["number"]
+
+            for item in items:
+                asin = (item.get("asin") or "").strip().upper() or None
+                try:
+                    qty = max(1, int(item.get("quantity") or 1))
+                except (ValueError, TypeError):
+                    qty = 1
+
+                # Upsert: match by (ext_id, tracking, asin) when asin is known
+                parcel = None
+                if ext_id and asin:
+                    parcel = (
+                        db.query(Parcel)
+                        .filter(
+                            Parcel.external_order_id == ext_id,
+                            Parcel.supplier_id == supplier_id,
+                            Parcel.tracking_number == tracking,
+                            Parcel.asin == asin,
+                        )
+                        .first()
+                    )
+                elif ext_id:
+                    parcel = (
+                        db.query(Parcel)
+                        .filter(
+                            Parcel.external_order_id == ext_id,
+                            Parcel.supplier_id == supplier_id,
+                            Parcel.tracking_number == tracking,
+                        )
+                        .first()
+                    )
+
+                if parcel is not None and parcel.payment_report_date is not None:
+                    skipped += 1
+                    continue
+
+                if parcel is None:
+                    title = None
+                    if asin:
+                        try:
+                            from app.services import keepa_service
+                            title = keepa_service.get_title_only(asin)
+                        except Exception:
+                            pass
+                    parcel = Parcel(
+                        external_order_id=ext_id or None,
+                        tracking_number=tracking,
+                        supplier_id=supplier_id,
+                        client_id=client_id,
+                        qty=qty,
+                        asin=asin,
+                        title=title,
+                        arrived_at=None,
+                        status="in_transit",
+                        match_source="manual" if client_id else None,
+                    )
+                    db.add(parcel)
+                    created += 1
+                else:
+                    changed = False
+                    if ext_id and parcel.external_order_id != ext_id:
+                        parcel.external_order_id = ext_id; changed = True
+                    if parcel.qty != qty:
+                        parcel.qty = qty; changed = True
+                    if asin and parcel.asin != asin:
+                        parcel.asin = asin; changed = True
+                    if parcel.supplier_id != supplier_id:
+                        parcel.supplier_id = supplier_id; changed = True
+                    if client_id and parcel.client_id != client_id:
+                        parcel.client_id = client_id; changed = True
+                    if changed:
+                        updated += 1
+                    else:
+                        skipped += 1
+            continue  # delivery handled; skip per-track loop below
+
+        # ── Multiple tracks (or 1 track + 1 item) → one Parcel per track ────
         total_qty = 0
         for it in items:
             try:
@@ -251,19 +334,16 @@ def sync(supplier_id: int, username: str, password: str, db,
             tracking = track_obj["number"]
             track_status = (track_obj.get("status") or "").strip()
             track_delivered_at = _parse_delivery_date(track_obj.get("deliveryDate"))
-            # Qty: even split, remainder to first track
             qty = total_qty // n + (1 if i < total_qty % n else 0)
             if qty == 0:
                 qty = 1
 
-            # ASIN: match by index if possible, fall back to first item
             asin = None
             src_item = items[i] if i < len(items) else (items[0] if items else None)
             if src_item:
                 raw_asin = (src_item.get("asin") or "").strip().upper()
                 asin = raw_asin or None
 
-            # Find existing parcel — order_id is the primary identifier
             parcel = None
             if ext_id:
                 parcel = (
@@ -281,16 +361,11 @@ def sync(supplier_id: int, username: str, password: str, db,
                     Parcel.supplier_id == supplier_id,
                 ).first()
 
-            # Skip paid parcels — already processed manually or by report
             if parcel is not None and parcel.payment_report_date is not None:
                 skipped += 1
                 continue
 
-            # Map housecargo delivery status to our status
-            is_delivered = "deliver" in track_status.lower()
-
             if parcel is None:
-                # Fetch title from Keepa if ASIN available (best-effort)
                 title = None
                 if asin:
                     try:
@@ -316,20 +391,15 @@ def sync(supplier_id: int, username: str, password: str, db,
             else:
                 changed = False
                 if ext_id and parcel.external_order_id != ext_id:
-                    parcel.external_order_id = ext_id
-                    changed = True
+                    parcel.external_order_id = ext_id; changed = True
                 if parcel.qty != qty:
-                    parcel.qty = qty
-                    changed = True
+                    parcel.qty = qty; changed = True
                 if asin and parcel.asin != asin:
-                    parcel.asin = asin
-                    changed = True
+                    parcel.asin = asin; changed = True
                 if parcel.supplier_id != supplier_id:
-                    parcel.supplier_id = supplier_id
-                    changed = True
+                    parcel.supplier_id = supplier_id; changed = True
                 if client_id and parcel.client_id != client_id:
-                    parcel.client_id = client_id
-                    changed = True
+                    parcel.client_id = client_id; changed = True
                 if changed:
                     updated += 1
                 else:

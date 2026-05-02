@@ -268,7 +268,106 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
 
         products: list[dict] = order.get("products") or []
 
-        # Qty: sum all product quantities
+        # Skip orders that have been paid out on ShipX side (payout.buyer.amount != "0")
+        payout_amount = str(
+            (order.get("payout") or {}).get("buyer", {}).get("amount", "0")
+        ).strip()
+        if payout_amount != "0":
+            skipped += 1
+            continue
+
+        # Match client (uses first product for ASIN/wishlist matching)
+        matched_client_id, matched_asin, match_source, is_wrong_address = \
+            _match_client_for_order(order, supplier_id, db)
+
+        if matched_client_id is None:
+            final_status = "unidentified"
+        elif is_wrong_address:
+            final_status = "in_forwarding"
+        else:
+            final_status = "in_transit"
+
+        # ── Multiple products with extractable ASINs → one Parcel per product ──
+        if len(products) > 1:
+            per_product_asins = [_extract_asin(p.get("description") or "") for p in products]
+            if any(per_product_asins):
+                for prod, prod_asin in zip(products, per_product_asins):
+                    final_asin = prod_asin or matched_asin
+                    try:
+                        qty = max(1, int(prod.get("quantity") or 1))
+                    except (ValueError, TypeError):
+                        qty = 1
+
+                    # Upsert by (ext_id, tracking, asin)
+                    parcel = None
+                    if ext_id and final_asin:
+                        parcel = (
+                            db.query(Parcel)
+                            .filter(
+                                Parcel.external_order_id == ext_id,
+                                Parcel.supplier_id == supplier_id,
+                                Parcel.tracking_number == tracking,
+                                Parcel.asin == final_asin,
+                            )
+                            .first()
+                        )
+                    elif ext_id:
+                        parcel = (
+                            db.query(Parcel)
+                            .filter(
+                                Parcel.external_order_id == ext_id,
+                                Parcel.supplier_id == supplier_id,
+                                Parcel.tracking_number == tracking,
+                            )
+                            .first()
+                        )
+
+                    if parcel is not None and parcel.payment_report_date is not None:
+                        skipped += 1
+                        continue
+
+                    if parcel is None:
+                        title = None
+                        if final_asin:
+                            try:
+                                from app.services import keepa_service
+                                title = keepa_service.get_title_only(final_asin)
+                            except Exception:
+                                pass
+                        parcel = Parcel(
+                            external_order_id=ext_id or None,
+                            tracking_number=tracking,
+                            supplier_id=supplier_id,
+                            client_id=matched_client_id,
+                            qty=qty,
+                            asin=final_asin,
+                            title=title,
+                            arrived_at=None,
+                            status=final_status,
+                            match_source=match_source,
+                            is_wrong_address=is_wrong_address,
+                        )
+                        db.add(parcel)
+                        created += 1
+                    else:
+                        changed = False
+                        if parcel.qty != qty:
+                            parcel.qty = qty; changed = True
+                        if final_asin and parcel.asin != final_asin:
+                            parcel.asin = final_asin; changed = True
+                        if matched_client_id and not parcel.client_id:
+                            parcel.client_id = matched_client_id
+                            parcel.match_source = match_source
+                            if parcel.status == "unidentified":
+                                parcel.status = final_status
+                            changed = True
+                        if changed:
+                            updated += 1
+                        else:
+                            skipped += 1
+                continue  # order handled; skip single-parcel flow below
+
+        # ── Single product (or no extractable ASINs) → one Parcel per order ──
         qty = 0
         for p in products:
             try:
@@ -278,12 +377,9 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
         if qty == 0:
             qty = 1
 
-        # ASIN from first product's description
-        asin = None
-        if products:
-            asin = _extract_asin(products[0].get("description") or "")
+        asin = _extract_asin(products[0].get("description") or "") if products else None
+        final_asin = matched_asin or asin
 
-        # Find existing parcel — order_id is the primary identifier
         parcel = None
         if ext_id:
             parcel = (
@@ -297,34 +393,11 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
                 Parcel.supplier_id == supplier_id,
             ).first()
 
-        # Skip paid parcels — already processed manually or by report
         if parcel is not None and parcel.payment_report_date is not None:
             skipped += 1
             continue
 
-        # Skip orders that have been paid out on ShipX side (payout.buyer.amount != "0")
-        payout_amount = str(
-            (order.get("payout") or {}).get("buyer", {}).get("amount", "0")
-        ).strip()
-        if payout_amount != "0":
-            skipped += 1
-            continue
-
-        # Match client by address name and/or wishlist
-        matched_client_id, matched_asin, match_source, is_wrong_address = \
-            _match_client_for_order(order, supplier_id, db)
-
-        # Use matched ASIN over description-extracted ASIN
-        final_asin = matched_asin or asin
-        if matched_client_id is None:
-            final_status = "unidentified"
-        elif is_wrong_address:
-            final_status = "in_forwarding"
-        else:
-            final_status = "in_transit"
-
         if parcel is None:
-            # Fetch title from Keepa (best-effort)
             title = None
             if final_asin:
                 try:
@@ -351,24 +424,19 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
         else:
             changed = False
             if ext_id and parcel.external_order_id != ext_id:
-                parcel.external_order_id = ext_id
-                changed = True
+                parcel.external_order_id = ext_id; changed = True
             if parcel.qty != qty:
-                parcel.qty = qty
-                changed = True
+                parcel.qty = qty; changed = True
             if final_asin and parcel.asin != final_asin:
-                parcel.asin = final_asin
-                changed = True
+                parcel.asin = final_asin; changed = True
             if parcel.supplier_id != supplier_id:
-                parcel.supplier_id = supplier_id
-                changed = True
-            # Update client match if not yet set
+                parcel.supplier_id = supplier_id; changed = True
             if matched_client_id and not parcel.client_id:
                 parcel.client_id = matched_client_id
                 parcel.match_source = match_source
                 parcel.is_wrong_address = is_wrong_address
                 if parcel.status == "unidentified":
-                    parcel.status = "in_forwarding" if is_wrong_address else "in_transit"
+                    parcel.status = final_status
                 changed = True
             if changed:
                 updated += 1
@@ -404,7 +472,9 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db) -> 
         )
         .all()
     )
-    by_tracking: dict[str, Parcel] = {p.tracking_number: p for p in transit_parcels}
+    by_tracking: dict[str, list[Parcel]] = {}
+    for p in transit_parcels:
+        by_tracking.setdefault(p.tracking_number, []).append(p)
 
     if not by_tracking:
         return {"updated": 0, "skipped": 0, "errors": []}
@@ -415,35 +485,36 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db) -> 
     for order in orders:
         label_ext = order.get("label_ext") or {}
         tracking = (label_ext.get("track") or "").strip()
-        parcel = by_tracking.get(tracking)
-        if parcel is None:
+        parcels_for_track = by_tracking.get(tracking, [])
+        if not parcels_for_track:
             continue
 
         status_str = (label_ext.get("status") or "").strip().lower()
         is_delivered = status_str == "delivered"
         track_delivered_at = _parse_delivery_date(label_ext.get("delivery_at"))
 
-        if is_delivered and track_delivered_at:
-            parcel.arrived_at = track_delivered_at
-            parcel.status = "delivered"
+        for parcel in parcels_for_track:
+            if is_delivered and track_delivered_at:
+                parcel.arrived_at = track_delivered_at
+                parcel.status = "delivered"
 
-            # Auto-calculate cost from Keepa
-            if parcel.asin and parcel.purchase_price is None:
-                try:
-                    from app.services import keepa_service
-                    result = keepa_service.get_product_info(parcel.asin, track_delivered_at)
-                    if result.amazon_price is not None:
-                        parcel.amazon_price = result.amazon_price
-                    if result.cost is not None:
-                        parcel.purchase_price = float(result.cost)
-                    if result.title and not parcel.title:
-                        parcel.title = result.title
-                except Exception as exc:
-                    errors.append(f"Keepa error for {parcel.tracking_number} ({parcel.asin}): {exc}")
+                # Auto-calculate cost from Keepa
+                if parcel.asin and parcel.purchase_price is None:
+                    try:
+                        from app.services import keepa_service
+                        result = keepa_service.get_product_info(parcel.asin, track_delivered_at)
+                        if result.amazon_price is not None:
+                            parcel.amazon_price = result.amazon_price
+                        if result.cost is not None:
+                            parcel.purchase_price = float(result.cost)
+                        if result.title and not parcel.title:
+                            parcel.title = result.title
+                    except Exception as exc:
+                        errors.append(f"Keepa error for {parcel.tracking_number} ({parcel.asin}): {exc}")
 
-            updated += 1
-        else:
-            skipped += 1
+                updated += 1
+            else:
+                skipped += 1
 
     db.commit()
     return {"updated": updated, "skipped": skipped, "errors": errors}
