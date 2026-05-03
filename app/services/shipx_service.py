@@ -215,10 +215,29 @@ def _match_client_for_order(
         return None, None, None, False
 
     # Step 4: ASIN found but wishlist client not yet resolved → look it up by ASIN
+    # If multiple clients have this ASIN, use delivery address to disambiguate
     if not wishlist_client_id:
-        witem = db.query(WishlistItem).filter(WishlistItem.asin == asin).first()
-        if witem:
-            wishlist_client_id = witem.client_id
+        witems = db.query(WishlistItem).filter(WishlistItem.asin == asin).all()
+        if len(witems) == 1:
+            wishlist_client_id = witems[0].client_id
+        elif len(witems) > 1:
+            address_name = ((order.get("address") or {}).get("name") or "").strip()
+            matched_by_addr = None
+            if address_name:
+                for wi in witems:
+                    addr_row = (
+                        db.query(ClientShipXAddress)
+                        .filter(
+                            ClientShipXAddress.supplier_id == supplier_id,
+                            ClientShipXAddress.client_id == wi.client_id,
+                            ClientShipXAddress.address_name == address_name,
+                        )
+                        .first()
+                    )
+                    if addr_row:
+                        matched_by_addr = wi.client_id
+                        break
+            wishlist_client_id = matched_by_addr or witems[0].client_id
 
     # Step 5: ASIN not in any wishlist → unidentified (but keep the ASIN)
     if not wishlist_client_id:
@@ -241,6 +260,11 @@ def _match_client_for_order(
 
     is_wrong = bool(address_client_id and address_client_id != wishlist_client_id)
     return wishlist_client_id, asin, "wishlist", is_wrong
+
+
+def _sync_log(db, parcel, action: str, detail: str) -> None:
+    from app.models.parcel import ParcelLog
+    db.add(ParcelLog(parcel_id=parcel.id, user_name="sync", action=action, detail=detail))
 
 
 def _client_coeff(client_id, db) -> float:
@@ -373,9 +397,23 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
                     else:
                         changed = False
                         if parcel.qty != qty:
-                            parcel.qty = qty; changed = True
+                            old_qty = parcel.qty
+                            parcel.qty = qty
+                            _sync_log(db, parcel, "qty_changed", f"Qty changed from {old_qty} to {qty} (order {ext_id})")
+                            changed = True
                         if final_asin and parcel.asin != final_asin:
-                            parcel.asin = final_asin; changed = True
+                            old_asin = parcel.asin
+                            parcel.asin = final_asin
+                            _sync_log(db, parcel, "asin_changed", f"ASIN changed from {old_asin} to {final_asin} (order {ext_id})")
+                            try:
+                                from app.services import keepa_service
+                                coeff = _client_coeff(parcel.client_id or matched_client_id, db)
+                                result = keepa_service.get_estimated_cost(final_asin, coeff)
+                                if result.title:
+                                    parcel.title = result.title
+                            except Exception:
+                                pass
+                            changed = True
                         if matched_client_id and not parcel.client_id:
                             parcel.client_id = matched_client_id
                             parcel.match_source = match_source
@@ -453,9 +491,23 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
             if ext_id and parcel.external_order_id != ext_id:
                 parcel.external_order_id = ext_id; changed = True
             if parcel.qty != qty:
-                parcel.qty = qty; changed = True
+                old_qty = parcel.qty
+                parcel.qty = qty
+                _sync_log(db, parcel, "qty_changed", f"Qty changed from {old_qty} to {qty} (order {ext_id})")
+                changed = True
             if final_asin and parcel.asin != final_asin:
-                parcel.asin = final_asin; changed = True
+                old_asin = parcel.asin
+                parcel.asin = final_asin
+                _sync_log(db, parcel, "asin_changed", f"ASIN changed from {old_asin} to {final_asin} (order {ext_id})")
+                try:
+                    from app.services import keepa_service
+                    coeff = _client_coeff(parcel.client_id or matched_client_id, db)
+                    result = keepa_service.get_estimated_cost(final_asin, coeff)
+                    if result.title:
+                        parcel.title = result.title
+                except Exception:
+                    pass
+                changed = True
             if parcel.supplier_id != supplier_id:
                 parcel.supplier_id = supplier_id; changed = True
             if matched_client_id and not parcel.client_id:

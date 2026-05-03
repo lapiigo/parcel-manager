@@ -132,6 +132,11 @@ def _parse_delivery_date(dt_str: str | None) -> datetime | None:
     return None
 
 
+def _sync_log(db, parcel, action: str, detail: str) -> None:
+    from app.models.parcel import ParcelLog
+    db.add(ParcelLog(parcel_id=parcel.id, user_name="sync", action=action, detail=detail))
+
+
 def _client_coeff(client_id, db) -> float:
     """Return cost coefficient for a client, defaulting to 0.45."""
     if not client_id:
@@ -327,9 +332,23 @@ def sync(supplier_id: int, username: str, password: str, db,
                     if ext_id and parcel.external_order_id != ext_id:
                         parcel.external_order_id = ext_id; changed = True
                     if parcel.qty != qty:
-                        parcel.qty = qty; changed = True
+                        old_qty = parcel.qty
+                        parcel.qty = qty
+                        _sync_log(db, parcel, "qty_changed", f"Qty changed from {old_qty} to {qty} (order {ext_id})")
+                        changed = True
                     if asin and parcel.asin != asin:
-                        parcel.asin = asin; changed = True
+                        old_asin = parcel.asin
+                        parcel.asin = asin
+                        _sync_log(db, parcel, "asin_changed", f"ASIN changed from {old_asin} to {asin} (order {ext_id})")
+                        try:
+                            from app.services import keepa_service
+                            coeff = _client_coeff(parcel.client_id or client_id, db)
+                            result = keepa_service.get_estimated_cost(asin, coeff)
+                            if result.title:
+                                parcel.title = result.title
+                        except Exception:
+                            pass
+                        changed = True
                     if parcel.supplier_id != supplier_id:
                         parcel.supplier_id = supplier_id; changed = True
                     if client_id and parcel.client_id != client_id:
@@ -422,9 +441,23 @@ def sync(supplier_id: int, username: str, password: str, db,
                 if ext_id and parcel.external_order_id != ext_id:
                     parcel.external_order_id = ext_id; changed = True
                 if parcel.qty != qty:
-                    parcel.qty = qty; changed = True
+                    old_qty = parcel.qty
+                    parcel.qty = qty
+                    _sync_log(db, parcel, "qty_changed", f"Qty changed from {old_qty} to {qty} (order {ext_id})")
+                    changed = True
                 if asin and parcel.asin != asin:
-                    parcel.asin = asin; changed = True
+                    old_asin = parcel.asin
+                    parcel.asin = asin
+                    _sync_log(db, parcel, "asin_changed", f"ASIN changed from {old_asin} to {asin} (order {ext_id})")
+                    try:
+                        from app.services import keepa_service
+                        coeff = _client_coeff(parcel.client_id or client_id, db)
+                        result = keepa_service.get_estimated_cost(asin, coeff)
+                        if result.title:
+                            parcel.title = result.title
+                    except Exception:
+                        pass
+                    changed = True
                 if parcel.supplier_id != supplier_id:
                     parcel.supplier_id = supplier_id; changed = True
                 if client_id and parcel.client_id != client_id:
