@@ -522,28 +522,20 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
 
         status_str = (label_ext.get("status") or "").strip().lower()
         is_delivered = status_str == "delivered"
-        track_delivered_at = _parse_delivery_date(label_ext.get("delivery_at"))
-
-        # Estimated delivery date — try several possible field names
-        estimated_at = _parse_delivery_date(
-            label_ext.get("estimate_at")
-            or label_ext.get("estimated_delivery_at")
-            or label_ext.get("expected_at")
-            or label_ext.get("expected_delivery_at")
-            or label_ext.get("eta")
-        )
+        # delivery_at carries estimated date in transit, actual date when delivered
+        delivery_date = _parse_delivery_date(label_ext.get("delivery_at"))
 
         for parcel in parcels_for_track:
-            if is_delivered and track_delivered_at:
-                parcel.arrived_at = track_delivered_at
-                parcel.estimated_delivery_at = None  # clear estimate once actually delivered
+            if is_delivered and delivery_date:
+                parcel.arrived_at = delivery_date
+                parcel.estimated_delivery_at = None
                 parcel.status = "delivered"
 
                 # Auto-calculate cost from Keepa
                 if parcel.asin and parcel.purchase_price is None:
                     try:
                         from app.services import keepa_service
-                        result = keepa_service.get_product_info(parcel.asin, track_delivered_at)
+                        result = keepa_service.get_product_info(parcel.asin, delivery_date)
                         if result.amazon_price is not None:
                             parcel.amazon_price = result.amazon_price
                         if result.cost is not None:
@@ -555,9 +547,9 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
 
                 updated += 1
             else:
-                # Still in transit — update estimated date if available
-                if estimated_at and parcel.estimated_delivery_at != estimated_at:
-                    parcel.estimated_delivery_at = estimated_at
+                # Still in transit — delivery_at is the estimated arrival
+                if delivery_date and parcel.estimated_delivery_at != delivery_date:
+                    parcel.estimated_delivery_at = delivery_date
                     updated += 1
                 else:
                     skipped += 1
