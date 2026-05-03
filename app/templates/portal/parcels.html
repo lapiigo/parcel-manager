@@ -102,6 +102,9 @@
             <span class="text-xs px-2 py-1 rounded-full font-medium {{ STATUS_COLORS.get(p.status, '') }}">
               {{ STATUS_LABELS.get(p.status, p.status) }}
             </span>
+            {% if p.status == 'in_transit' and p.estimated_delivery_at %}
+            <p class="text-xs text-gray-400 mt-0.5">Est. {{ p.estimated_delivery_at.strftime('%d.%m.%Y') }}</p>
+            {% endif %}
             {% if p.status == 'negotiating' and p.negotiations %}
               {% if p.negotiations[-1].actor == 'admin' %}
               <p class="text-xs text-amber-600 font-medium mt-0.5">Supplier responded</p>
