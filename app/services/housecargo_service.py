@@ -192,7 +192,7 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
             track_status = (track_obj.get("status") or "").strip()
             # deliveryDate carries estimated date in transit, actual date when delivered
             delivery_date = _parse_delivery_date(track_obj.get("deliveryDate"))
-            is_delivered = "deliver" in track_status.lower()
+            is_delivered = track_status.lower() == "delivered"
 
             for parcel in parcels_for_track:
                 if is_delivered and delivery_date:
