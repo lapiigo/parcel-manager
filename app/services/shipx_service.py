@@ -472,10 +472,12 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
     return {"created": created, "updated": updated, "skipped": skipped, "errors": errors}
 
 
-def sync_transit_updates(supplier_id: int, username: str, password: str, db) -> dict:
+def sync_transit_updates(supplier_id: int, username: str, password: str, db,
+                         client_id: int | None = None) -> dict:
     """
     Fetch delivery updates from shipx for parcels currently in `in_transit` status only.
-    No new parcels created — only updates existing in_transit parcels.
+    If client_id is given, only update parcels for that client (+ unassigned parcels).
+    No new parcels created.
 
     Returns {"updated": int, "skipped": int, "errors": list[str]}
     """
@@ -484,16 +486,16 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db) -> 
     token = _login(username, password)
     orders = _fetch_orders(token)
 
-    transit_parcels = (
-        db.query(Parcel)
-        .filter(
-            Parcel.supplier_id == supplier_id,
-            Parcel.status == "in_transit",
-            Parcel.payment_report_date.is_(None),
-        )
-        .all()
+    q = db.query(Parcel).filter(
+        Parcel.supplier_id == supplier_id,
+        Parcel.status == "in_transit",
+        Parcel.payment_report_date.is_(None),
     )
-    # ShipX sync runs without client filter — all in_transit parcels for this supplier are checked
+    if client_id is not None:
+        # Also pick up unassigned parcels — manually created parcels may have no client_id yet
+        q = q.filter((Parcel.client_id == client_id) | Parcel.client_id.is_(None))
+
+    transit_parcels = q.all()
     by_tracking: dict[str, list[Parcel]] = {}
     for p in transit_parcels:
         by_tracking.setdefault(p.tracking_number, []).append(p)

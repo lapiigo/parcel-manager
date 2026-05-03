@@ -177,11 +177,31 @@ def sync_transit(
                     result = hc_sync_transit(supplier.id, supplier.login_username, password, db)
                     total_updated += result["updated"]
                     errors.extend(result["errors"])
-            else:
-                password = decrypt(supplier.login_password_encrypted)
-                result = sx_sync_transit(supplier.id, supplier.login_username, password, db)
-                total_updated += result["updated"]
-                errors.extend(result["errors"])
+            else:  # shipx
+                from app.models.client import Client as ClientModel
+                sx_clients = (
+                    db.query(ClientModel)
+                    .filter(
+                        ClientModel.shipx_supplier_id == supplier.id,
+                        ClientModel.shipx_username.isnot(None),
+                        ClientModel.shipx_password_encrypted.isnot(None),
+                    )
+                    .all()
+                )
+                if sx_clients:
+                    for sx_client in sx_clients:
+                        cli_pass = decrypt(sx_client.shipx_password_encrypted)
+                        result = sx_sync_transit(
+                            supplier.id, sx_client.shipx_username, cli_pass, db,
+                            client_id=sx_client.id
+                        )
+                        total_updated += result["updated"]
+                        errors.extend(result["errors"])
+                elif supplier.login_username and supplier.login_password_encrypted:
+                    password = decrypt(supplier.login_password_encrypted)
+                    result = sx_sync_transit(supplier.id, supplier.login_username, password, db)
+                    total_updated += result["updated"]
+                    errors.extend(result["errors"])
         except (HouseCargoError, ShipXError) as exc:
             errors.append(f"{supplier.name}: {exc}")
         except Exception as exc:

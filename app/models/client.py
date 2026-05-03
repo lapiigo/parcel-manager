@@ -38,6 +38,11 @@ class Client(Base):
     housecargo_username = Column(String(255), nullable=True)
     housecargo_password_encrypted = Column(Text, nullable=True)
 
+    # ShipX integration: each client has their own ShipX account
+    shipx_supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
+    shipx_username = Column(String(255), nullable=True)
+    shipx_password_encrypted = Column(Text, nullable=True)
+
     # Cost coefficient for estimated purchase price (e.g. 0.45 = 45% of Amazon price)
     # None → use default 0.45
     cost_coefficient = Column(Float, nullable=True)
@@ -53,5 +58,6 @@ class Client(Base):
                                   order_by="WishlistItem.created_at")
     shipx_addresses = relationship("ClientShipXAddress", back_populates="client", cascade="all, delete-orphan")
     housecargo_supplier = relationship("Supplier", foreign_keys=[housecargo_supplier_id])
+    shipx_supplier = relationship("Supplier", foreign_keys=[shipx_supplier_id])
     deposits = relationship("ClientDeposit", back_populates="client", cascade="all, delete-orphan",
                             order_by="ClientDeposit.created_at.desc()")

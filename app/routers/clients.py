@@ -189,6 +189,30 @@ def client_housecargo_save(
     return RedirectResponse(f"/clients/{client_id}", status_code=302)
 
 
+# ── ShipX credentials ────────────────────────────────────────────────────────
+
+@router.post("/{client_id}/shipx")
+def client_shipx_save(
+    request: Request,
+    client_id: int,
+    shipx_supplier_id: str = Form(""),
+    shipx_username: str = Form(""),
+    shipx_password: str = Form(""),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if client and can(current_user, "edit_client"):
+        client.shipx_supplier_id = int(shipx_supplier_id) if shipx_supplier_id else None
+        client.shipx_username = shipx_username.strip() or None
+        if shipx_password.strip():
+            client.shipx_password_encrypted = encrypt(shipx_password.strip())
+        elif not shipx_username.strip():
+            client.shipx_password_encrypted = None
+        db.commit()
+    return RedirectResponse(f"/clients/{client_id}", status_code=302)
+
+
 # ── Prime Prep ────────────────────────────────────────────────────────────────
 
 @router.post("/{client_id}/prime-prep")
