@@ -66,8 +66,12 @@ def _login(username: str, password: str) -> str:
     return token
 
 
-def _fetch_orders(token: str) -> list[dict]:
-    """Fetch all active (unpaid) orders via POST /orders/filter with pagination."""
+def _fetch_orders(token: str, statuses: list[str] | None = None) -> list[dict]:
+    """
+    Fetch orders via POST /orders/filter with pagination.
+    statuses=None → no status filter (fetches all orders, used for transit updates).
+    statuses=[...] → filter by those statuses (used for initial sync of active orders).
+    """
     url = BASE_URL + ORDERS_PATH
     headers = {
         **_BROWSER_HEADERS,
@@ -80,12 +84,14 @@ def _fetch_orders(token: str) -> list[dict]:
     limit = 100
 
     while True:
-        body = {
+        body: dict = {
             "offset": offset,
             "limit": limit,
             "order": {"sent_at": "desc"},
-            "attributes": {"status": ["sent", "received"]},
         }
+        if statuses is not None:
+            body["attributes"] = {"status": statuses}
+
         try:
             r = requests.post(url, json=body, headers=headers, timeout=20)
         except requests.RequestException as exc:
@@ -256,7 +262,7 @@ def sync(supplier_id: int, username: str, password: str, db) -> dict:
     from app.models.parcel import Parcel
 
     token = _login(username, password)
-    orders = _fetch_orders(token)
+    orders = _fetch_orders(token, statuses=["sent", "received"])
 
     created = updated = skipped = 0
     errors: list[str] = []
@@ -484,7 +490,8 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
     from app.models.parcel import Parcel
 
     token = _login(username, password)
-    orders = _fetch_orders(token)
+    # No status filter — we need to see delivered orders too, not just active ones
+    orders = _fetch_orders(token, statuses=None)
 
     q = db.query(Parcel).filter(
         Parcel.supplier_id == supplier_id,
@@ -517,9 +524,19 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
         is_delivered = status_str == "delivered"
         track_delivered_at = _parse_delivery_date(label_ext.get("delivery_at"))
 
+        # Estimated delivery date — try several possible field names
+        estimated_at = _parse_delivery_date(
+            label_ext.get("estimate_at")
+            or label_ext.get("estimated_delivery_at")
+            or label_ext.get("expected_at")
+            or label_ext.get("expected_delivery_at")
+            or label_ext.get("eta")
+        )
+
         for parcel in parcels_for_track:
             if is_delivered and track_delivered_at:
                 parcel.arrived_at = track_delivered_at
+                parcel.estimated_delivery_at = None  # clear estimate once actually delivered
                 parcel.status = "delivered"
 
                 # Auto-calculate cost from Keepa
@@ -538,7 +555,12 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
 
                 updated += 1
             else:
-                skipped += 1
+                # Still in transit — update estimated date if available
+                if estimated_at and parcel.estimated_delivery_at != estimated_at:
+                    parcel.estimated_delivery_at = estimated_at
+                    updated += 1
+                else:
+                    skipped += 1
 
     db.commit()
     return {"updated": updated, "skipped": skipped, "errors": errors}

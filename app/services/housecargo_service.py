@@ -188,9 +188,18 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
             track_delivered_at = _parse_delivery_date(track_obj.get("deliveryDate"))
             is_delivered = "deliver" in track_status.lower()
 
+            # Estimated delivery date — try several possible field names
+            estimated_at = _parse_delivery_date(
+                track_obj.get("estimatedDeliveryDate")
+                or track_obj.get("expectedDate")
+                or track_obj.get("plannedDeliveryDate")
+                or track_obj.get("eta")
+            )
+
             for parcel in parcels_for_track:
                 if is_delivered and track_delivered_at:
                     parcel.arrived_at = track_delivered_at
+                    parcel.estimated_delivery_at = None  # clear estimate once actually delivered
                     parcel.status = "delivered"
 
                     if parcel.asin and parcel.purchase_price is None:
@@ -208,7 +217,12 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
 
                     updated += 1
                 else:
-                    skipped += 1
+                    # Still in transit — update estimated date if available
+                    if estimated_at and parcel.estimated_delivery_at != estimated_at:
+                        parcel.estimated_delivery_at = estimated_at
+                        updated += 1
+                    else:
+                        skipped += 1
 
     db.commit()
     return {"updated": updated, "skipped": skipped, "errors": errors}

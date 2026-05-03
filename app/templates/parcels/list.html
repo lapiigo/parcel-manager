@@ -245,6 +245,9 @@
       <div class="flex items-center gap-2 mt-0.5 flex-wrap text-xs text-gray-400">
         {% if p.asin and not multi %}<span class="font-mono">{{ p.asin }}</span>{% endif %}
         <span>×{{ p.qty or 1 }}</span>
+        {% if p.estimated_delivery_at and not p.arrived_at %}
+        <span class="text-sky-500 font-medium">Est. {{ p.estimated_delivery_at.strftime('%d.%m.%Y') }}</span>
+        {% endif %}
         {% if not multi %}
           {% if p.supplier %}<span>{{ p.supplier.name }}</span>{% endif %}
           {% if show_client_col %}

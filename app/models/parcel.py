@@ -30,6 +30,7 @@ class Parcel(Base):
     height_cm = Column(Float, nullable=True)
     notes = Column(Text, nullable=True)
     arrived_at = Column(DateTime, nullable=True)
+    estimated_delivery_at = Column(DateTime, nullable=True)  # planned delivery date from supplier
     # Forwarding: points to the original parcel that was at the wrong warehouse
     forwarded_from_id = Column(Integer, ForeignKey("parcels.id"), nullable=True)
     # Return to supplier tracking

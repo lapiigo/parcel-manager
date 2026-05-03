@@ -117,6 +117,7 @@ def startup():
         ("clients", "shipx_supplier_id", "INTEGER"),
         ("clients", "shipx_username", "VARCHAR(255)"),
         ("clients", "shipx_password_encrypted", "TEXT"),
+        ("parcels", "estimated_delivery_at", "DATETIME"),
     ]
     with engine.connect() as conn:
         for table, column, col_type in new_columns:
