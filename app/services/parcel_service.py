@@ -116,6 +116,19 @@ def transition_parcel(
         parcel.arrived_at = datetime.utcnow()
     parcel.updated_at = datetime.utcnow()
 
+    if new_status == "ready_to_pay":
+        _ensure_warehouse_item(db, parcel)
+
     db.commit()
     db.refresh(parcel)
     return True, "OK"
+
+
+def _ensure_warehouse_item(db: Session, parcel: Parcel) -> None:
+    from app.models.warehouse import WarehouseItem
+    existing = db.query(WarehouseItem).filter(WarehouseItem.parcel_id == parcel.id).first()
+    if not existing:
+        db.add(WarehouseItem(
+            parcel_id=parcel.id,
+            client_id=parcel.client_id,
+        ))

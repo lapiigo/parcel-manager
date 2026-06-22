@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Warehouse — Parcel Manager{% endblock %}
+{% block heading %}Warehouse{% endblock %}
+
+{% block content %}
+
+{% set STATUS_BORDER = {
+  'available':  'border-l-green-500',
+  'reserved':   'border-l-amber-400',
+  'sold':       'border-l-purple-400',
+  'fba_sent':   'border-l-blue-400',
+  'returned':   'border-l-gray-300',
+} %}
+
+<!-- Filter pills -->
+<div class="flex items-center gap-2 flex-wrap mb-3">
+  {% set pills = [
+    ('',          'All Available',  counts.get('available',0) + counts.get('reserved',0)),
+    ('available', 'Available',      counts.get('available',0)),
+    ('reserved',  'Reserved',       counts.get('reserved',0)),
+    ('archive',   'Archive',        counts.get('archive',0)),
+  ] %}
+  {% for val, label, cnt in pills %}
+  <a href="/warehouse{% if val %}?status={{ val }}{% endif %}"
+     class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors
+            {% if active_status == val %}bg-indigo-600 text-white{% else %}bg-white border border-gray-200 text-gray-600 hover:border-indigo-300 hover:text-indigo-600{% endif %}">
+    {{ label }}
+    <span class="text-xs {% if active_status == val %}bg-indigo-500 text-white{% else %}bg-gray-100 text-gray-500{% endif %} rounded-full px-1.5 py-0.5 font-semibold">{{ cnt }}</span>
+  </a>
+  {% endfor %}
+</div>
+
+<div class="bg-white rounded-xl border border-gray-100 shadow-sm">
+  <!-- Search + filters -->
+  <form method="get" action="/warehouse" class="flex gap-2 items-center px-4 py-3 border-b border-gray-100 flex-wrap">
+    {% if active_status %}<input type="hidden" name="status" value="{{ active_status }}" />{% endif %}
+    <input type="text" name="q" value="{{ q }}"
+           placeholder="Tracking, ASIN, or title…"
+           class="flex-1 min-w-0 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+    {% if clients %}
+    <select name="client_filter" onchange="this.form.submit()"
+            class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-gray-600">
+      <option value="">All clients</option>
+      {% for c in clients %}
+      <option value="{{ c.id }}" {% if client_filter == c.id|string %}selected{% endif %}>{{ c.name }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm px-4 py-2 rounded-lg transition-colors shrink-0">Search</button>
+    {% if q or client_filter %}<a href="/warehouse{% if active_status %}?status={{ active_status }}{% endif %}" class="text-sm text-gray-400 hover:text-gray-600 px-1">✕</a>{% endif %}
+  </form>
+
+  <!-- Table -->
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-xs uppercase text-gray-500 font-semibold tracking-wide">
+        <tr>
+          <th class="px-4 py-3 text-left">Item</th>
+          <th class="px-4 py-3 text-left hidden sm:table-cell">Client</th>
+          <th class="px-4 py-3 text-left">Status</th>
+          <th class="px-4 py-3 text-left hidden md:table-cell">Location</th>
+          <th class="px-4 py-3 text-left hidden md:table-cell">Added</th>
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-50">
+        {% for item in items %}
+        {% set p = item.parcel %}
+        <tr class="hover:bg-gray-50 transition-colors border-l-4 {{ STATUS_BORDER.get(item.status, 'border-l-gray-200') }}">
+          <td class="px-4 py-3">
+            <p class="font-mono text-xs font-medium text-gray-800">{{ p.tracking_number if p else '—' }}</p>
+            {% if p and p.asin %}<p class="text-xs text-gray-400 font-mono">{{ p.asin }}{% if p.qty and p.qty > 1 %} ×{{ p.qty }}{% endif %}</p>{% endif %}
+            {% if p and p.title %}<p class="text-xs text-gray-500 truncate max-w-[200px]">{{ p.title }}</p>{% endif %}
+          </td>
+          <td class="px-4 py-3 text-xs text-gray-600 hidden sm:table-cell">
+            {{ item.client.name if item.client else (p.client.name if p and p.client else '—') }}
+          </td>
+          <td class="px-4 py-3">
+            <span class="text-xs px-2 py-1 rounded-full font-medium {{ WAREHOUSE_STATUS_COLORS.get(item.status, '') }}">
+              {{ WAREHOUSE_STATUS_LABELS.get(item.status, item.status) }}
+            </span>
+          </td>
+          <td class="px-4 py-3 text-xs text-gray-500 hidden md:table-cell">{{ item.location or '—' }}</td>
+          <td class="px-4 py-3 text-xs text-gray-400 hidden md:table-cell">{{ item.created_at.strftime('%d.%m.%Y') if item.created_at else '—' }}</td>
+          <td class="px-4 py-3 text-right">
+            <a href="/warehouse/{{ item.id }}" class="text-indigo-600 hover:underline text-xs font-medium">Details →</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="px-4 py-12 text-center text-gray-400">
+          <p class="text-2xl mb-2">🏭</p>
+          <p>No items in warehouse</p>
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

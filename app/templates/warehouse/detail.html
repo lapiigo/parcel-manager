@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Warehouse Item — Parcel Manager{% endblock %}
+{% block heading %}Warehouse Item{% endblock %}
+{% block header_actions %}
+<a href="/warehouse" class="text-sm text-gray-500 hover:text-gray-700 font-medium">← Back to Warehouse</a>
+{% endblock %}
+
+{% block content %}
+{% set p = item.parcel %}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+  <!-- Main info -->
+  <div class="lg:col-span-2 space-y-4">
+
+    <!-- Parcel info card -->
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+      <div class="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <h2 class="text-base font-semibold text-gray-800">{{ p.title or p.asin or p.tracking_number if p else 'Unknown' }}</h2>
+          {% if p and p.asin %}<p class="text-sm text-gray-400 font-mono mt-0.5">{{ p.asin }}</p>{% endif %}
+        </div>
+        <span class="text-xs px-2 py-1 rounded-full font-medium shrink-0 {{ WAREHOUSE_STATUS_COLORS.get(item.status, '') }}">
+          {{ WAREHOUSE_STATUS_LABELS.get(item.status, item.status) }}
+        </span>
+      </div>
+
+      {% if p %}
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+        <div>
+          <p class="text-xs text-gray-400 mb-0.5">Tracking</p>
+          <p class="font-mono font-medium text-gray-800">{{ p.tracking_number }}</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-400 mb-0.5">Qty</p>
+          <p class="font-medium text-gray-800">{{ p.qty or 1 }}</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-400 mb-0.5">Client</p>
+          <p class="font-medium text-gray-800">{{ p.client.name if p.client else '—' }}</p>
+        </div>
+        {% if p.purchase_price %}
+        <div>
+          <p class="text-xs text-gray-400 mb-0.5">Purchase Price</p>
+          <p class="font-medium text-gray-800">${{ '%.2f'|format(p.purchase_price) }}</p>
+        </div>
+        {% endif %}
+        {% if p.arrived_at %}
+        <div>
+          <p class="text-xs text-gray-400 mb-0.5">Arrived</p>
+          <p class="font-medium text-gray-800">{{ p.arrived_at.strftime('%d.%m.%Y') }}</p>
+        </div>
+        {% endif %}
+        <div>
+          <p class="text-xs text-gray-400 mb-0.5">Parcel</p>
+          <a href="/parcels/{{ p.id }}" class="text-indigo-600 hover:underline text-sm font-medium">View parcel →</a>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Notes -->
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+      <h3 class="text-sm font-semibold text-gray-700 mb-3">Notes</h3>
+      {% if can(current_user, 'edit_parcel') %}
+      <form method="post" action="/warehouse/{{ item.id }}/update">
+        <textarea name="notes" rows="4"
+                  class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-none"
+                  placeholder="Internal notes about this item…">{{ item.notes or '' }}</textarea>
+        <input type="hidden" name="status" value="{{ item.status }}" />
+        <input type="hidden" name="location" value="{{ item.location or '' }}" />
+        <button type="submit" class="mt-2 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg transition-colors">Save</button>
+      </form>
+      {% else %}
+      <p class="text-sm text-gray-600">{{ item.notes or '—' }}</p>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <!-- Sidebar -->
+  <div class="space-y-4">
+
+    <!-- Update status + location -->
+    {% if can(current_user, 'edit_parcel') %}
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+      <h3 class="text-sm font-semibold text-gray-700 mb-3">Update</h3>
+      <form method="post" action="/warehouse/{{ item.id }}/update" class="space-y-3">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Status</label>
+          <select name="status" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+            {% for s, label in WAREHOUSE_STATUS_LABELS.items() %}
+            <option value="{{ s }}" {% if item.status == s %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Location (shelf / bin)</label>
+          <input type="text" name="location" value="{{ item.location or '' }}"
+                 placeholder="e.g. A3-shelf2"
+                 class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+        </div>
+        <input type="hidden" name="notes" value="{{ item.notes or '' }}" />
+        <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Save changes</button>
+      </form>
+    </div>
+    {% endif %}
+
+    <!-- Meta -->
+    <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5 text-xs text-gray-400 space-y-1">
+      <p>Added to warehouse: <span class="text-gray-600">{{ item.created_at.strftime('%d.%m.%Y %H:%M') if item.created_at else '—' }}</span></p>
+      <p>Last updated: <span class="text-gray-600">{{ item.updated_at.strftime('%d.%m.%Y %H:%M') if item.updated_at else '—' }}</span></p>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

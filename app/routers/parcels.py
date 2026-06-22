@@ -49,10 +49,17 @@ def _check_parcel_access(parcel, current_user):
     return parcel.client_id == current_user.client_id
 
 
+_ACTIVE_STATUSES = [
+    "unidentified", "in_transit", "delivered", "negotiating",
+    "ready_to_pay", "forwarding", "return_to_supplier",
+]
+_ARCHIVE_STATUSES = ["paid", "sold", "ignored"]
+
+
 @router.get("", response_class=HTMLResponse)
 def parcel_list(
     request: Request,
-    status: str = Query("in_transit"),
+    status: str = Query(""),
     q: str = Query(""),
     unpaid: str = Query(""),
     report: str = Query(""),
@@ -64,8 +71,12 @@ def parcel_list(
     if not can(current_user, "view_parcels"):
         return RedirectResponse("/dashboard", status_code=302)
     query = _company_query(db, current_user)
-    if status:
+    if status == "archive":
+        query = query.filter(Parcel.status.in_(_ARCHIVE_STATUSES))
+    elif status:
         query = query.filter(Parcel.status == status)
+    else:
+        query = query.filter(Parcel.status.in_(_ACTIVE_STATUSES))
     if unpaid:
         query = query.filter(Parcel.payment_report_date.is_(None))
     if report:
@@ -122,6 +133,7 @@ def parcel_list(
             "STATUS_LABELS": STATUS_LABELS,
             "STATUS_COLORS": STATUS_COLORS,
             "clients": clients,
+            "report": report,
             "can": can,
         },
     )
@@ -134,7 +146,7 @@ def sync_transit(
     current_user=Depends(require_manager_up),
 ):
     if not can(current_user, "edit_parcel"):
-        return RedirectResponse("/parcels?status=in_transit", status_code=302)
+        return RedirectResponse("/parcels?status=in_transit", status_code=302)  # keep status filter on access denied
 
     from app.services.housecargo_service import sync_transit_updates as hc_sync_transit, HouseCargoError
     from app.services.shipx_service import sync_transit_updates as sx_sync_transit, ShipXError
@@ -213,7 +225,7 @@ def sync_transit(
 
     import urllib.parse
     return RedirectResponse(
-        f"/parcels?status=in_transit&sync_flash={urllib.parse.quote(flash)}",
+        f"/parcels?sync_flash={urllib.parse.quote(flash)}",
         status_code=302,
     )
 

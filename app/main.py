@@ -8,7 +8,7 @@ from app.database import engine
 import app.models  # register all models with SQLAlchemy
 
 from app.auth import NotAuthenticatedException, ForbiddenException
-from app.routers import auth, dashboard, parcels, suppliers, clients, orders, admin, reports, portal, todo
+from app.routers import auth, dashboard, parcels, suppliers, clients, orders, admin, reports, portal, todo, warehouse
 
 app = FastAPI(title="Parcel Manager", docs_url=None, redoc_url=None)
 
@@ -61,6 +61,7 @@ app.include_router(admin.router)
 app.include_router(reports.router)
 app.include_router(portal.router)
 app.include_router(todo.router)
+app.include_router(warehouse.router)
 
 
 # ── DB init (create tables if they don't exist) ───────────────────────────────

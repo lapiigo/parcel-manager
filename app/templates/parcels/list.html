@@ -2,11 +2,11 @@
 {% block title %}Parcels — Parcel Manager{% endblock %}
 {% block heading %}Parcels{% endblock %}
 {% block header_actions %}
-  {% if active_status == 'in_transit' and can(current_user, 'edit_parcel') %}
+  {% if can(current_user, 'edit_parcel') %}
   <form method="post" action="/parcels/sync-transit">
     <button type="submit" class="inline-flex items-center gap-2 border border-gray-300 text-gray-600 hover:bg-gray-50 text-sm font-medium px-4 py-2 rounded-lg transition-colors">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-      Sync Deliveries
+      Sync
     </button>
   </form>
   {% endif %}
@@ -19,82 +19,72 @@
 {% endblock %}
 
 {% block content %}
+
+{% set STATUS_BORDER = {
+  'unidentified':       'border-l-gray-300',
+  'in_transit':         'border-l-yellow-400',
+  'delivered':          'border-l-sky-400',
+  'negotiating':        'border-l-amber-400',
+  'ready_to_pay':       'border-l-green-500',
+  'paid':               'border-l-emerald-500',
+  'forwarding':         'border-l-blue-400',
+  'return_to_supplier': 'border-l-orange-400',
+  'sold':               'border-l-purple-400',
+  'ignored':            'border-l-gray-200',
+} %}
+
+{% set active_total = counts.get('unidentified',0) + counts.get('in_transit',0) + counts.get('delivered',0) + counts.get('negotiating',0) + counts.get('ready_to_pay',0) + counts.get('forwarding',0) + counts.get('return_to_supplier',0) %}
+{% set archive_total = counts.get('paid',0) + counts.get('sold',0) + counts.get('ignored',0) %}
+
 <div x-data="bulkSelect()" class="space-y-3">
 
-<!-- Status tabs + filters -->
+<!-- Status filter pills -->
+<div class="flex items-center gap-2 flex-wrap">
+  {% set pills = [
+    ('',                  'All Active',         active_total),
+    ('unidentified',      'Unidentified',        counts.get('unidentified',0)),
+    ('in_transit',        'In Transit',          counts.get('in_transit',0)),
+    ('delivered',         'Delivered',           counts.get('delivered',0)),
+    ('negotiating',       'Negotiating',         counts.get('negotiating',0)),
+    ('ready_to_pay',      'Ready to Pay',        counts.get('ready_to_pay',0)),
+    ('archive',           'Archive',             archive_total),
+  ] %}
+  {% for val, label, cnt in pills %}
+  <a href="/parcels{% if val %}?status={{ val }}{% endif %}"
+     class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors
+            {% if active_status == val %}bg-indigo-600 text-white{% else %}bg-white border border-gray-200 text-gray-600 hover:border-indigo-300 hover:text-indigo-600{% endif %}">
+    {{ label }}
+    <span class="text-xs {% if active_status == val %}bg-indigo-500 text-white{% else %}bg-gray-100 text-gray-500{% endif %} rounded-full px-1.5 py-0.5 font-semibold">{{ cnt }}</span>
+  </a>
+  {% endfor %}
+</div>
+
+<!-- Flash + banners -->
+{% if sync_flash %}
+<div class="px-4 py-2 bg-blue-50 border border-blue-100 rounded-xl flex items-center gap-2 text-xs text-blue-800">
+  <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+  {{ sync_flash }}
+</div>
+{% endif %}
+
+{% if counts.get('ready_to_pay', 0) > 0 and can(current_user, 'edit_parcel') %}
+<div class="px-4 py-2.5 bg-green-50 border border-green-100 rounded-xl flex items-center gap-3 flex-wrap">
+  <span class="text-xs text-green-700"><strong>{{ counts.ready_to_pay }}</strong> parcels ready to pay</span>
+  <a href="/parcels/report/new" class="ml-auto text-xs bg-green-700 hover:bg-green-800 text-white px-3 py-1.5 rounded-lg font-medium transition-colors">Generate Payment Report</a>
+</div>
+{% endif %}
+
+{% if active_status == 'archive' and report %}
+<div class="px-4 py-2 bg-emerald-50 border border-emerald-100 rounded-xl flex items-center gap-2 text-xs text-emerald-800">
+  Showing report: <strong>{{ report }}</strong>
+  <a href="/parcels?status=archive" class="ml-auto text-emerald-600 hover:underline">Show all archived</a>
+</div>
+{% endif %}
+
+<!-- Search + filters -->
 <div class="bg-white rounded-xl border border-gray-100 shadow-sm">
-  <div class="flex border-b border-gray-100 overflow-x-auto">
-    {% set tabs = [
-      ("unidentified",       "Unidentified",        "gray"),
-      ("in_transit",         "In Transit",          "yellow"),
-      ("delivered",          "Delivered",           "sky"),
-      ("negotiating",        "Negotiating",         "amber"),
-      ("ready_to_pay",       "Ready to Pay",        "green"),
-      ("paid",               "Paid",                "emerald"),
-      ("forwarding",         "Forwarding",          "blue"),
-      ("return_to_supplier", "Return to Supplier",  "orange"),
-      ("sold",               "Sold",                "purple"),
-      ("ignored",            "Ignored",             "gray"),
-    ] %}
-    {% for status_key, label, color in tabs %}
-    <a href="/parcels?status={{ status_key }}"
-       class="flex items-center gap-1.5 px-3 py-3 text-xs font-medium whitespace-nowrap border-b-2 transition-colors
-              {% if active_status == status_key %}border-indigo-600 text-indigo-600{% else %}border-transparent text-gray-500 hover:text-gray-700{% endif %}">
-      {{ label }}
-      <span class="rounded-full px-1.5 py-0.5 font-semibold text-xs
-        {% if color == 'yellow' %}bg-yellow-100 text-yellow-700
-        {% elif color == 'sky' %}bg-sky-100 text-sky-700
-        {% elif color == 'amber' %}bg-amber-100 text-amber-700
-        {% elif color == 'green' %}bg-green-100 text-green-700
-        {% elif color == 'emerald' %}bg-emerald-100 text-emerald-700
-        {% elif color == 'blue' %}bg-blue-100 text-blue-700
-        {% elif color == 'orange' %}bg-orange-100 text-orange-700
-        {% elif color == 'purple' %}bg-purple-100 text-purple-700
-        {% else %}bg-gray-100 text-gray-500{% endif %}">
-        {{ counts.get(status_key, 0) }}
-      </span>
-    </a>
-    {% endfor %}
-  </div>
-
-  {% if sync_flash %}
-  <div class="px-4 py-2 bg-blue-50 border-b border-blue-100 flex items-center gap-2 text-xs text-blue-800">
-    <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-    {{ sync_flash }}
-  </div>
-  {% endif %}
-
-  {% if active_status == 'ready_to_pay' and counts.get('ready_to_pay', 0) > 0 and can(current_user, 'edit_parcel') %}
-  <div class="px-4 py-2 bg-green-50 border-b border-green-100 flex items-center gap-3 flex-wrap">
-    <span class="text-xs text-green-700"><strong>{{ counts.ready_to_pay }}</strong> parcels ready to pay</span>
-    <a href="/parcels/report/new" class="ml-auto text-xs bg-green-700 hover:bg-green-800 text-white px-3 py-1.5 rounded-lg font-medium transition-colors">Generate Payment Report</a>
-  </div>
-  {% endif %}
-  {% if active_status == 'paid' and report %}
-  <div class="px-4 py-2 bg-emerald-50 border-b border-emerald-100 flex items-center gap-2 text-xs text-emerald-800">
-    Showing report: <strong>{{ report }}</strong>
-    <a href="/parcels?status=paid" class="ml-auto text-emerald-600 hover:underline">Show all paid</a>
-  </div>
-  {% endif %}
-  {% if active_status == 'return_to_supplier' %}
-  {% set pending_return = parcels | selectattr('is_returned', 'equalto', false) | list | length %}
-  {% if pending_return > 0 %}
-  <div class="px-4 py-2 bg-orange-50 border-b border-orange-100 flex items-center gap-2 text-xs text-orange-800">
-    <strong>{{ pending_return }}</strong> pending return to supplier
-  </div>
-  {% endif %}
-  {% endif %}
-  {% if active_status == 'negotiating' %}
-  {% set waiting_admin = parcels | selectattr('negotiations') | list %}
-  <div class="px-4 py-2 bg-amber-50 border-b border-amber-100 flex items-center gap-2 text-xs text-amber-800">
-    <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
-    Client counter-offers in progress. Open each parcel to approve or send your own offer.
-  </div>
-  {% endif %}
-
-  <!-- Search -->
-  <form method="get" action="/parcels" class="flex gap-2 items-center px-4 py-3 flex-wrap">
-    <input type="hidden" name="status" value="{{ active_status }}" />
+  <form method="get" action="/parcels" class="flex gap-2 items-center px-4 py-3 border-b border-gray-100 flex-wrap">
+    {% if active_status %}<input type="hidden" name="status" value="{{ active_status }}" />{% endif %}
     <input type="checkbox" :checked="allSelected" @change="toggleAll($event)"
            class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400 cursor-pointer shrink-0" title="Select all" />
     <input type="text" name="q" value="{{ q }}" placeholder="Order ID, tracking, ASIN…"
@@ -110,184 +100,151 @@
     </select>
     {% endif %}
     <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm px-4 py-2 rounded-lg transition-colors shrink-0">Search</button>
-    {% if q or client_filter %}<a href="/parcels?status={{ active_status }}" class="text-sm text-gray-400 hover:text-gray-600 px-2 py-2">✕</a>{% endif %}
+    {% if q or client_filter %}<a href="/parcels{% if active_status %}?status={{ active_status }}{% endif %}" class="text-sm text-gray-400 hover:text-gray-600 px-2 py-2">✕</a>{% endif %}
   </form>
-</div>
 
-<!-- Parcel groups -->
-{% set show_client_col = current_user.role == 'super_admin' or not current_user.client_id %}
-{% for order_id, group in order_groups %}
-{% set first = group[0] %}
-{% set multi = group|length > 1 %}
+  <!-- Parcel groups -->
+  {% set show_client_col = current_user.role == 'super_admin' or not current_user.client_id %}
 
-<div class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+  {% for order_id, group in order_groups %}
+  {% set first = group[0] %}
+  {% set multi = group|length > 1 %}
 
-  {% if multi or order_id %}
-  <!-- Order group header (not individually clickable) -->
-  <div class="flex items-start gap-3 px-4 py-3 bg-gray-50/80 border-b border-gray-100">
+  <div class="border-b border-gray-50 last:border-b-0">
 
-    <!-- Select-all checkboxes for this group -->
-    <div class="flex items-center pt-0.5 shrink-0 relative z-10 gap-1">
-      {% for p in group %}
-      <input type="checkbox" :value="{{ p.id }}" x-model="selected"
-             class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400 cursor-pointer {% if not loop.first %}hidden{% endif %}" />
-      {% endfor %}
-    </div>
-
-    <div class="flex-1 min-w-0">
-      <div class="flex items-center gap-2 flex-wrap">
-        {% if order_id %}
-        <span class="font-mono font-bold text-indigo-700 text-sm">{{ order_id }}</span>
-        {% endif %}
-        {% if multi %}
-        <span class="text-xs bg-gray-200 text-gray-500 px-1.5 py-0.5 rounded-full font-medium">{{ group|length }} tracks</span>
-        {% endif %}
-        {% if show_client_col %}
-        {% if can(current_user, 'edit_parcel') %}
-        <div class="relative" x-data="{ open: false }">
-          <button @click.stop="open = !open"
-                  class="text-xs {% if first.client %}text-gray-600 hover:text-indigo-600{% else %}text-amber-500 hover:text-amber-700{% endif %} font-medium transition-colors">
-            {{ first.client.name if first.client else "Unassigned" }}
-          </button>
-          <div x-show="open" @click.outside="open = false"
-               class="absolute z-30 top-full mt-1 left-0 bg-white rounded-xl shadow-xl border border-gray-100 py-1 min-w-max">
-            <form method="post" action="/parcels/{{ first.id }}/assign-client">
-              <input type="hidden" name="back_status" value="{{ active_status }}" />
-              <button type="submit" name="client_id" value=""
-                      class="w-full text-left px-4 py-2 text-sm text-gray-400 hover:bg-gray-50 italic">— Unassigned —</button>
-              {% for c in clients %}
-              <button type="submit" name="client_id" value="{{ c.id }}"
-                      class="w-full text-left px-4 py-2 text-sm {% if first.client_id == c.id %}text-indigo-600 font-semibold{% else %}text-gray-700{% endif %} hover:bg-gray-50">
-                {{ c.name }}
-              </button>
-              {% endfor %}
-            </form>
-          </div>
-        </div>
-        {% else %}
-        <span class="text-xs {% if first.client %}text-gray-600{% else %}text-amber-500{% endif %} font-medium">
-          {{ first.client.name if first.client else "Unassigned" }}
-        </span>
-        {% endif %}
-        {% endif %}
+    {% if multi or order_id %}
+    <!-- Order group header -->
+    <div class="flex items-start gap-3 px-4 py-3 bg-gray-50/80 border-l-4 {{ STATUS_BORDER.get(first.status, 'border-l-gray-200') }}">
+      <div class="flex items-center pt-0.5 shrink-0 relative z-10 gap-1">
+        {% for p in group %}
+        <input type="checkbox" :value="{{ p.id }}" x-model="selected"
+               class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400 cursor-pointer {% if not loop.first %}hidden{% endif %}" />
+        {% endfor %}
       </div>
-      <div class="flex items-center gap-2 mt-1 flex-wrap text-xs text-gray-400">
-        {% if first.asin %}<span class="font-mono">{{ first.asin }}</span>{% endif %}
-        <span>qty {{ group | sum(attribute='qty') }}</span>
-        {% if first.supplier %}<span>{{ first.supplier.name }}</span>{% endif %}
-        {% if active_status == 'paid' and first.payment_report_date %}
-          <span class="bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">{{ first.payment_report_date }}</span>
-        {% endif %}
-        {% if active_status == 'return_to_supplier' %}
-          {% if first.is_returned %}
-          <span class="bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full font-medium">Returned</span>
-          {% else %}
-          <span class="bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">Pending</span>
-          {% endif %}
-        {% endif %}
-        <span class="ml-auto">{{ first.created_at.strftime('%d.%m.%Y') if first.created_at else "" }}</span>
-      </div>
-    </div>
-
-    <!-- Status badges -->
-    <div class="flex items-center gap-1 flex-wrap justify-end shrink-0">
-      {% set statuses = group | map(attribute='status') | unique | list %}
-      {% for s in statuses %}
-      <span class="text-xs px-2 py-0.5 rounded-full font-medium {{ STATUS_COLORS.get(s, '') }}">
-        {{ STATUS_LABELS.get(s, s) }}
-      </span>
-      {% endfor %}
-      {% if first.is_wrong_address %}
-      <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">Wrong address</span>
-      {% endif %}
-    </div>
-  </div>
-  {% endif %}
-
-  <!-- Individual track rows — <a> IS the row, @click.stop on interactive children -->
-  {% for p in group %}
-  <a href="/parcels/{{ p.id }}"
-     class="flex items-center gap-3 px-4 py-3 hover:bg-indigo-50/50 transition-colors
-            {% if not loop.last %}border-b border-gray-50{% endif %}"
-     :class="selected.includes({{ p.id }}) ? '!bg-indigo-50' : ''">
-
-    <!-- Checkbox: stop click so the link doesn't fire -->
-    <div @click.stop class="shrink-0">
-      <input type="checkbox" :value="{{ p.id }}" x-model="selected"
-             class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400 cursor-pointer" />
-    </div>
-
-    <!-- Content -->
-    <div class="flex-1 min-w-0">
-      <!-- Top line: tracking number + status badges -->
-      <div class="flex items-center gap-2 flex-wrap">
-        <span class="font-mono text-sm font-medium text-gray-800">{{ p.tracking_number }}</span>
-        {% if not multi %}
-          <span class="text-xs px-2 py-0.5 rounded-full font-medium {{ STATUS_COLORS.get(p.status, '') }}">
-            {{ STATUS_LABELS.get(p.status, p.status) }}
-          </span>
-          {% if p.is_wrong_address %}
-          <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">Wrong address</span>
-          {% endif %}
-          {% if active_status == 'paid' and p.payment_report_date %}
-            <span class="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">{{ p.payment_report_date }}</span>
-          {% endif %}
-          {% if active_status == 'return_to_supplier' %}
-            {% if p.is_returned %}
-            <span class="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full font-medium">Returned</span>
-            {% else %}
-            <span class="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">Pending</span>
-            {% endif %}
-          {% endif %}
-        {% endif %}
-      </div>
-      <!-- Bottom line: ASIN, qty, supplier, client, date -->
-      <div class="flex items-center gap-2 mt-0.5 flex-wrap text-xs text-gray-400">
-        {% if p.asin and not multi %}<span class="font-mono">{{ p.asin }}</span>{% endif %}
-        <span>×{{ p.qty or 1 }}</span>
-        {% if p.estimated_delivery_at and not p.arrived_at %}
-        <span class="text-sky-500 font-medium">Est. {{ p.estimated_delivery_at.strftime('%d.%m.%Y') }}</span>
-        {% endif %}
-        {% if not multi %}
-          {% if p.supplier %}<span>{{ p.supplier.name }}</span>{% endif %}
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          {% if order_id %}<span class="font-mono font-bold text-indigo-700 text-sm">{{ order_id }}</span>{% endif %}
+          {% if multi %}<span class="text-xs bg-gray-200 text-gray-500 px-1.5 py-0.5 rounded-full font-medium">{{ group|length }} tracks</span>{% endif %}
           {% if show_client_col %}
-          <span class="{% if p.client %}text-gray-500{% else %}text-amber-500{% endif %} font-medium">
-            {{ p.client.name if p.client else "Unassigned" }}
+          {% if can(current_user, 'edit_parcel') %}
+          <div class="relative" x-data="{ open: false }">
+            <button @click.stop="open = !open"
+                    class="text-xs {% if first.client %}text-gray-600 hover:text-indigo-600{% else %}text-amber-500 hover:text-amber-700{% endif %} font-medium transition-colors">
+              {{ first.client.name if first.client else "Unassigned" }}
+            </button>
+            <div x-show="open" @click.outside="open = false"
+                 class="absolute z-30 top-full mt-1 left-0 bg-white rounded-xl shadow-xl border border-gray-100 py-1 min-w-max">
+              <form method="post" action="/parcels/{{ first.id }}/assign-client">
+                <input type="hidden" name="back_status" value="{{ active_status }}" />
+                <button type="submit" name="client_id" value=""
+                        class="w-full text-left px-4 py-2 text-sm text-gray-400 hover:bg-gray-50 italic">— Unassigned —</button>
+                {% for c in clients %}
+                <button type="submit" name="client_id" value="{{ c.id }}"
+                        class="w-full text-left px-4 py-2 text-sm {% if first.client_id == c.id %}text-indigo-600 font-semibold{% else %}text-gray-700{% endif %} hover:bg-gray-50">
+                  {{ c.name }}
+                </button>
+                {% endfor %}
+              </form>
+            </div>
+          </div>
+          {% else %}
+          <span class="text-xs {% if first.client %}text-gray-600{% else %}text-amber-500{% endif %} font-medium">
+            {{ first.client.name if first.client else "Unassigned" }}
           </span>
           {% endif %}
-          <span>{{ p.created_at.strftime('%d.%m.%Y') if p.created_at else "" }}</span>
-        {% else %}
-          <span class="{{ STATUS_COLORS.get(p.status, '') }} px-1.5 py-0.5 rounded-full font-medium">{{ STATUS_LABELS.get(p.status, p.status) }}</span>
+          {% endif %}
+        </div>
+        <div class="flex items-center gap-2 mt-1 flex-wrap text-xs text-gray-400">
+          {% if first.asin %}<span class="font-mono">{{ first.asin }}</span>{% endif %}
+          <span>qty {{ group | sum(attribute='qty') }}</span>
+          {% if first.supplier %}<span>{{ first.supplier.name }}</span>{% endif %}
+          {% if active_status == 'archive' and first.payment_report_date %}
+            <span class="bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">{{ first.payment_report_date }}</span>
+          {% endif %}
+          <span class="ml-auto">{{ first.created_at.strftime('%d.%m.%Y') if first.created_at else "" }}</span>
+        </div>
+      </div>
+      <div class="flex items-center gap-1 flex-wrap justify-end shrink-0">
+        {% set statuses = group | map(attribute='status') | unique | list %}
+        {% for s in statuses %}
+        <span class="text-xs px-2 py-0.5 rounded-full font-medium {{ STATUS_COLORS.get(s, '') }}">{{ STATUS_LABELS.get(s, s) }}</span>
+        {% endfor %}
+        {% if first.is_wrong_address %}
+        <span class="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">Wrong address</span>
         {% endif %}
       </div>
     </div>
+    {% endif %}
 
-    <!-- Delete + chevron: stop click so the link doesn't fire on delete -->
-    <div @click.stop class="flex items-center gap-2 shrink-0">
-      {% if can(current_user, 'delete_parcel') %}
-      <form method="post" action="/parcels/{{ p.id }}/delete"
-            onsubmit="return confirm('Delete {{ p.tracking_number }}?')">
-        <input type="hidden" name="back_status" value="{{ active_status }}" />
-        <button type="submit" class="text-gray-300 hover:text-red-500 transition-colors p-1" title="Delete">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-        </button>
-      </form>
-      {% endif %}
-      <svg class="w-4 h-4 text-gray-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
-      </svg>
-    </div>
+    <!-- Individual track rows -->
+    {% for p in group %}
+    <a href="/parcels/{{ p.id }}"
+       class="flex items-center gap-3 px-4 py-3 hover:bg-indigo-50/50 transition-colors border-l-4 {{ STATUS_BORDER.get(p.status, 'border-l-gray-200') }}
+              {% if not loop.last %}border-b border-gray-50{% endif %}"
+       :class="selected.includes({{ p.id }}) ? '!bg-indigo-50' : ''">
 
-  </a>
+      <div @click.stop class="shrink-0">
+        <input type="checkbox" :value="{{ p.id }}" x-model="selected"
+               class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400 cursor-pointer" />
+      </div>
+
+      <div class="flex-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="font-mono text-sm font-medium text-gray-800">{{ p.tracking_number }}</span>
+          {% if not multi %}
+            <span class="text-xs px-2 py-0.5 rounded-full font-medium {{ STATUS_COLORS.get(p.status, '') }}">{{ STATUS_LABELS.get(p.status, p.status) }}</span>
+            {% if p.is_wrong_address %}<span class="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">Wrong address</span>{% endif %}
+            {% if p.payment_report_date %}<span class="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-medium">{{ p.payment_report_date }}</span>{% endif %}
+            {% if p.is_returned %}<span class="text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full font-medium">Returned</span>{% endif %}
+          {% endif %}
+        </div>
+        <div class="flex items-center gap-2 mt-0.5 flex-wrap text-xs text-gray-400">
+          {% if p.asin and not multi %}<span class="font-mono">{{ p.asin }}</span>{% endif %}
+          <span>×{{ p.qty or 1 }}</span>
+          {% if p.estimated_delivery_at and not p.arrived_at %}
+          <span class="text-sky-500 font-medium">Est. {{ p.estimated_delivery_at.strftime('%d.%m.%Y') }}</span>
+          {% endif %}
+          {% if not multi %}
+            {% if p.supplier %}<span>{{ p.supplier.name }}</span>{% endif %}
+            {% if show_client_col %}
+            <span class="{% if p.client %}text-gray-500{% else %}text-amber-500{% endif %} font-medium">
+              {{ p.client.name if p.client else "Unassigned" }}
+            </span>
+            {% endif %}
+            <span>{{ p.created_at.strftime('%d.%m.%Y') if p.created_at else "" }}</span>
+          {% else %}
+            <span class="{{ STATUS_COLORS.get(p.status, '') }} px-1.5 py-0.5 rounded-full font-medium">{{ STATUS_LABELS.get(p.status, p.status) }}</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <div @click.stop class="flex items-center gap-2 shrink-0">
+        {% if can(current_user, 'delete_parcel') %}
+        <form method="post" action="/parcels/{{ p.id }}/delete"
+              onsubmit="return confirm('Delete {{ p.tracking_number }}?')">
+          <input type="hidden" name="back_status" value="{{ active_status }}" />
+          <button type="submit" class="text-gray-300 hover:text-red-500 transition-colors p-1" title="Delete">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+          </button>
+        </form>
+        {% endif %}
+        <svg class="w-4 h-4 text-gray-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+        </svg>
+      </div>
+
+    </a>
+    {% endfor %}
+
+  </div>
+  {% else %}
+  <div class="px-4 py-12 text-center text-gray-400">
+    <p class="text-2xl mb-2">📭</p>
+    <p>No parcels found</p>
+  </div>
   {% endfor %}
 
-</div>
-{% else %}
-<div class="bg-white rounded-xl border border-gray-100 shadow-sm px-4 py-12 text-center text-gray-400">
-  <p class="text-2xl mb-2">📭</p>
-  <p>No parcels with this status</p>
-</div>
-{% endfor %}
+</div><!-- bg-white card -->
 
 <!-- Bulk action bar -->
 <div x-show="selected.length > 0"
@@ -359,7 +316,7 @@
   </form>
 </div>
 
-</div><!-- end x-data -->
+</div><!-- x-data -->
 
 <script>
 function bulkSelect() {

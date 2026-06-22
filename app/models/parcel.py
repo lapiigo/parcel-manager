@@ -59,6 +59,7 @@ class Parcel(Base):
 
     forwarded_from = relationship("Parcel", remote_side="Parcel.id", foreign_keys=[forwarded_from_id], backref="forwards")
     negotiations = relationship("ParcelNegotiation", back_populates="parcel", cascade="all, delete-orphan", order_by="ParcelNegotiation.created_at.asc()")
+    warehouse_item = relationship("WarehouseItem", back_populates="parcel", uselist=False, cascade="all, delete-orphan")
 
 
 class ParcelNegotiation(Base):
