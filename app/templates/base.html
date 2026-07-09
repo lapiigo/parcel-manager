@@ -235,5 +235,59 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 });
 </script>
+<script>
+function exportCols(storageKey, allColDefs) {
+  const defaultIds = allColDefs.slice(0, 8).map(function(c) { return c.id; });
+  return {
+    exportOpen: false,
+    allCols: allColDefs,
+    selectedCols: [],
+    init: function() {
+      try {
+        var saved = localStorage.getItem(storageKey);
+        this.selectedCols = saved ? JSON.parse(saved) : defaultIds.slice();
+      } catch(e) { this.selectedCols = defaultIds.slice(); }
+    },
+    isSelected: function(id) { return this.selectedCols.includes(id); },
+    toggle: function(id) {
+      if (this.isSelected(id)) {
+        this.selectedCols = this.selectedCols.filter(function(c) { return c !== id; });
+      } else {
+        this.selectedCols.push(id);
+      }
+      localStorage.setItem(storageKey, JSON.stringify(this.selectedCols));
+    },
+    labelOf: function(id) {
+      var col = this.allCols.find(function(c) { return c.id === id; });
+      return col ? col.label : id;
+    },
+    moveUp: function(idx) {
+      if (idx > 0) {
+        var a = this.selectedCols[idx - 1];
+        this.selectedCols[idx - 1] = this.selectedCols[idx];
+        this.selectedCols[idx] = a;
+        this.selectedCols = this.selectedCols.slice();
+        localStorage.setItem(storageKey, JSON.stringify(this.selectedCols));
+      }
+    },
+    moveDown: function(idx) {
+      if (idx < this.selectedCols.length - 1) {
+        var a = this.selectedCols[idx + 1];
+        this.selectedCols[idx + 1] = this.selectedCols[idx];
+        this.selectedCols[idx] = a;
+        this.selectedCols = this.selectedCols.slice();
+        localStorage.setItem(storageKey, JSON.stringify(this.selectedCols));
+      }
+    },
+    doExport: function() {
+      var params = new URLSearchParams(window.location.search);
+      params.set('export', '1');
+      params.set('cols', this.selectedCols.join(','));
+      window.location.href = window.location.pathname + '?' + params.toString();
+      this.exportOpen = false;
+    }
+  };
+}
+</script>
 </body>
 </html>

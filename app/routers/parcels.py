@@ -1,8 +1,9 @@
+import io
 import os
 import uuid
 from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, Request, Form, UploadFile, File, Query
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from typing import Optional, List
@@ -56,6 +57,93 @@ _ACTIVE_STATUSES = [
 _ARCHIVE_STATUSES = ["paid", "sold", "ignored"]
 
 
+def _export_parcels_excel(parcels, cols_str: str, is_admin: bool = True) -> StreamingResponse:
+    """Build and return an xlsx StreamingResponse for the given parcel list."""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    admin_cols = [
+        ("id",               "ID"),
+        ("tracking_number",  "Tracking #"),
+        ("external_order_id","Order ID"),
+        ("asin",             "ASIN"),
+        ("title",            "Product Title"),
+        ("quantity",         "Qty"),
+        ("status",           "Status"),
+        ("supplier",         "Supplier"),
+        ("client",           "Client"),
+        ("created_at",       "Added"),
+        ("arrived_at",       "Arrived"),
+        ("purchase_price",   "Cost ($)"),
+        ("amazon_price",     "Buy Box ($)"),
+        ("weight_kg",        "Weight (kg)"),
+    ]
+    portal_cols = [
+        ("id",             "ID"),
+        ("tracking_number","Tracking #"),
+        ("asin",           "ASIN"),
+        ("title",          "Product Title"),
+        ("quantity",       "Qty"),
+        ("status",         "Status"),
+        ("created_at",     "Added"),
+        ("arrived_at",     "Arrived"),
+        ("purchase_price", "Cost ($)"),
+    ]
+    all_col_defs = admin_cols if is_admin else portal_cols
+    col_map = dict(all_col_defs)
+    allowed_ids = {k for k, _ in all_col_defs}
+
+    selected_ids = [c.strip() for c in cols_str.split(",") if c.strip() and c.strip() in allowed_ids] if cols_str else [k for k, _ in all_col_defs]
+    if not selected_ids:
+        selected_ids = [k for k, _ in all_col_defs]
+    selected = [(c, col_map[c]) for c in selected_ids]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Parcels"
+
+    fill = PatternFill("solid", fgColor="4F46E5")
+    hdr_font = Font(bold=True, color="FFFFFF")
+    for ci, (_, label) in enumerate(selected, 1):
+        cell = ws.cell(row=1, column=ci, value=label)
+        cell.fill = fill
+        cell.font = hdr_font
+        cell.alignment = Alignment(horizontal="center")
+
+    for ri, p in enumerate(parcels, 2):
+        for ci, (col_id, _) in enumerate(selected, 1):
+            val = None
+            if   col_id == "id":               val = p.id
+            elif col_id == "tracking_number":  val = p.tracking_number
+            elif col_id == "external_order_id":val = p.external_order_id or ""
+            elif col_id == "asin":             val = p.asin or ""
+            elif col_id == "title":            val = p.title or ""
+            elif col_id == "quantity":         val = p.quantity
+            elif col_id == "status":           val = STATUS_LABELS.get(p.status, p.status)
+            elif col_id == "supplier":         val = p.supplier.name if p.supplier else ""
+            elif col_id == "client":           val = p.client.name if p.client else ""
+            elif col_id == "created_at":       val = p.created_at.strftime("%d.%m.%Y") if p.created_at else ""
+            elif col_id == "arrived_at":       val = p.arrived_at.strftime("%d.%m.%Y") if p.arrived_at else ""
+            elif col_id == "purchase_price":   val = float(p.purchase_price) if p.purchase_price is not None else None
+            elif col_id == "amazon_price":     val = float(p.amazon_price) if p.amazon_price else None
+            elif col_id == "weight_kg":        val = float(p.weight_kg) if p.weight_kg else None
+            ws.cell(row=ri, column=ci, value=val)
+
+    for col in ws.columns:
+        width = max((len(str(c.value or "")) for c in col), default=8)
+        ws.column_dimensions[col[0].column_letter].width = min(width + 2, 50)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f"parcels_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
 @router.get("", response_class=HTMLResponse)
 def parcel_list(
     request: Request,
@@ -66,6 +154,10 @@ def parcel_list(
     sync_flash: str = Query(""),
     client_filter: str = Query(""),
     supplier_filter: str = Query(""),
+    date_from: str = Query(""),
+    date_to: str = Query(""),
+    export: str = Query(""),
+    cols: str = Query(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
@@ -88,6 +180,17 @@ def parcel_list(
         query = query.filter(Parcel.client_id == int(client_filter))
     if supplier_filter:
         query = query.filter(Parcel.supplier_id == int(supplier_filter))
+    if date_from:
+        try:
+            query = query.filter(Parcel.created_at >= datetime.strptime(date_from, "%Y-%m-%d"))
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            dt_end = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            query = query.filter(Parcel.created_at <= dt_end)
+        except ValueError:
+            pass
     if q:
         q_stripped = q.strip()
         q_upper = q_stripped.upper()
@@ -102,6 +205,10 @@ def parcel_list(
         Parcel.external_order_id.asc(),
         Parcel.created_at.asc(),
     ).all()
+
+    if export == "1":
+        is_admin = current_user.role in ("super_admin", "admin", "staff")
+        return _export_parcels_excel(parcels_flat, cols, is_admin=is_admin)
 
     # Group by order_id
     order_groups: list[tuple[str | None, list]] = []
@@ -133,6 +240,8 @@ def parcel_list(
             "q": q,
             "client_filter": client_filter,
             "supplier_filter": supplier_filter,
+            "date_from": date_from,
+            "date_to": date_to,
             "sync_flash": sync_flash,
             "STATUS_LABELS": STATUS_LABELS,
             "STATUS_COLORS": STATUS_COLORS,

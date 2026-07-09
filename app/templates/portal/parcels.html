@@ -3,139 +3,251 @@
 {% block heading %}My Parcels{% endblock %}
 
 {% block content %}
-<div class="bg-white rounded-xl border border-gray-100 shadow-sm mb-4">
-  <!-- Tabs -->
-  <div class="flex border-b border-gray-100 overflow-x-auto">
-    {% set tabs = [
-      ('',              'All Active',       'gray'),
-      ('in_transit',    'In Transit',       'yellow'),
-      ('delivered',     'Awaiting Review',  'sky'),
-      ('negotiating',   'In Negotiation',   'amber'),
-      ('ready_to_pay',  'Ready to Pay',     'green'),
-    ] %}
+<div x-data="exportCols('parcel_export_portal', [
+  {id:'tracking_number', label:'Tracking #'},
+  {id:'asin', label:'ASIN'},
+  {id:'title', label:'Product Title'},
+  {id:'quantity', label:'Qty'},
+  {id:'status', label:'Status'},
+  {id:'created_at', label:'Added'},
+  {id:'arrived_at', label:'Arrived'},
+  {id:'purchase_price', label:'Cost ($)'},
+  {id:'id', label:'ID'}
+])" class="space-y-4">
 
-    {% for s, label, color in tabs %}
+  <!-- Status pills -->
+  <div class="flex flex-wrap gap-2">
+    {% set pill_tabs = [
+      ('',             'All Active',      'gray'),
+      ('in_transit',   'In Transit',      'yellow'),
+      ('delivered',    'Awaiting Review', 'sky'),
+      ('negotiating',  'In Negotiation',  'amber'),
+      ('ready_to_pay', 'Ready to Pay',    'green'),
+      ('archive',      'Archive',         'purple'),
+    ] %}
+    {% for s, label, color in pill_tabs %}
+    {% set cnt = counts.get(s, 0) if s else (counts.values()|sum - counts.get('archive',0)) %}
     <a href="/portal/parcels{% if s %}?status={{ s }}{% endif %}"
-       class="flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors
-              {% if active_status == s %}border-indigo-600 text-indigo-600{% else %}border-transparent text-gray-500 hover:text-gray-700{% endif %}">
+       class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors
+              {% if active_status == s %}
+                {% if color == 'yellow' %}bg-yellow-500 text-white
+                {% elif color == 'sky' %}bg-sky-600 text-white
+                {% elif color == 'amber' %}bg-amber-500 text-white
+                {% elif color == 'green' %}bg-green-600 text-white
+                {% elif color == 'purple' %}bg-purple-600 text-white
+                {% else %}bg-gray-700 text-white{% endif %}
+              {% else %}
+                {% if color == 'yellow' %}bg-yellow-50 text-yellow-700 hover:bg-yellow-100
+                {% elif color == 'sky' %}bg-sky-50 text-sky-700 hover:bg-sky-100
+                {% elif color == 'amber' %}bg-amber-50 text-amber-700 hover:bg-amber-100
+                {% elif color == 'green' %}bg-green-50 text-green-700 hover:bg-green-100
+                {% elif color == 'purple' %}bg-purple-50 text-purple-700 hover:bg-purple-100
+                {% else %}bg-gray-100 text-gray-600 hover:bg-gray-200{% endif %}
+              {% endif %}">
       {{ label }}
-      <span class="text-xs rounded-full px-2 py-0.5 font-semibold
-        {% if color == 'gray' %}bg-gray-100 text-gray-600
-        {% elif color == 'yellow' %}bg-yellow-100 text-yellow-700
-        {% elif color == 'sky' %}bg-sky-100 text-sky-700
-        {% elif color == 'amber' %}bg-amber-100 text-amber-700
-        {% elif color == 'green' %}bg-green-100 text-green-700
-        {% else %}bg-purple-100 text-purple-700{% endif %}">
-        {% if s == '' %}
-          {{ counts.values() | sum - counts.get('archive', 0) }}
-        {% else %}
-          {{ counts.get(s, 0) }}
-        {% endif %}
-      </span>
+      <span class="font-semibold">{{ cnt }}</span>
     </a>
     {% endfor %}
+  </div>
 
-    <!-- Archive tab -->
-    <a href="/portal/parcels?status=archive"
-       class="flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors
-              {% if active_status == 'archive' %}border-indigo-600 text-indigo-600{% else %}border-transparent text-gray-500 hover:text-gray-700{% endif %}">
-      Archive
-      <span class="text-xs rounded-full px-2 py-0.5 font-semibold bg-gray-100 text-gray-500">
-        {{ counts.get('archive', 0) }}
-      </span>
+  <!-- Search bar -->
+  {% set has_filters = q or date_from or date_to %}
+  <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
+    <form method="get" action="/portal/parcels" class="flex gap-2 items-center px-4 py-3 flex-wrap">
+      {% if active_status %}<input type="hidden" name="status" value="{{ active_status }}" />{% endif %}
+      <input type="text" name="q" value="{{ q }}"
+             placeholder="Tracking number or ASIN…"
+             class="flex-1 min-w-[140px] border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+      <input type="date" name="date_from" value="{{ date_from }}" title="From date"
+             class="border {% if date_from %}border-indigo-400 text-indigo-700{% else %}border-gray-200 text-gray-600{% endif %} rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+      <input type="date" name="date_to" value="{{ date_to }}" title="To date"
+             class="border {% if date_to %}border-indigo-400 text-indigo-700{% else %}border-gray-200 text-gray-600{% endif %} rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+      <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm px-4 py-2 rounded-lg transition-colors shrink-0">Search</button>
+      {% if has_filters %}<a href="/portal/parcels{% if active_status %}?status={{ active_status }}{% endif %}" class="text-sm text-gray-400 hover:text-red-500 transition-colors px-1" title="Clear">✕</a>{% endif %}
+    </form>
+    <div class="flex items-center justify-between px-4 py-2 border-t border-gray-100">
+      <span class="text-xs text-gray-400">{{ order_groups | length }} order(s)</span>
+      <button @click="exportOpen = true"
+              class="inline-flex items-center gap-1.5 text-sm text-indigo-600 hover:text-indigo-700 font-medium transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+        Export to Excel
+      </button>
+    </div>
+  </div>
+
+  <!-- Column picker modal -->
+  <div x-show="exportOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4"
+       @keydown.escape.window="exportOpen = false">
+    <div class="absolute inset-0 bg-black/40" @click="exportOpen = false"></div>
+    <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" @click.stop>
+      <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <h2 class="text-base font-semibold text-gray-900">Export to Excel</h2>
+        <button @click="exportOpen = false" class="text-gray-400 hover:text-gray-600">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <div>
+          <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Available Columns</p>
+          <div class="space-y-1.5">
+            <template x-for="col in allCols" :key="col.id">
+              <label class="flex items-center gap-2.5 cursor-pointer group">
+                <input type="checkbox" :checked="isSelected(col.id)" @change="toggle(col.id)"
+                       class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400" />
+                <span class="text-sm text-gray-700 group-hover:text-indigo-600 transition-colors" x-text="col.label"></span>
+              </label>
+            </template>
+          </div>
+        </div>
+        <div>
+          <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Column Order</p>
+          <div class="space-y-1.5 min-h-[120px]">
+            <template x-if="selectedCols.length === 0">
+              <p class="text-sm text-gray-400 italic">No columns selected</p>
+            </template>
+            <template x-for="(colId, idx) in selectedCols" :key="colId">
+              <div class="flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-1.5">
+                <span class="text-sm text-indigo-800 flex-1" x-text="labelOf(colId)"></span>
+                <button @click="moveUp(idx)" :disabled="idx === 0"
+                        class="text-indigo-400 hover:text-indigo-600 disabled:opacity-30 transition-colors p-0.5">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7"/></svg>
+                </button>
+                <button @click="moveDown(idx)" :disabled="idx === selectedCols.length - 1"
+                        class="text-indigo-400 hover:text-indigo-600 disabled:opacity-30 transition-colors p-0.5">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <button @click="toggle(colId)" class="text-indigo-300 hover:text-red-500 transition-colors p-0.5">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+              </div>
+            </template>
+          </div>
+          <p class="text-xs text-gray-400 mt-3">Your selection is saved automatically.</p>
+        </div>
+      </div>
+      <div class="px-6 pb-5 flex justify-end gap-3">
+        <button @click="exportOpen = false" class="px-4 py-2 border border-gray-200 text-gray-600 text-sm rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+        <button @click="doExport()" :disabled="selectedCols.length === 0"
+                class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors">
+          Download
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Banners -->
+  {% if active_status == 'delivered' and order_groups %}
+  <div class="px-4 py-3 bg-sky-50 border border-sky-200 rounded-xl flex items-center gap-2">
+    <svg class="w-4 h-4 text-sky-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 3l9 16H3L12 3z"/></svg>
+    <p class="text-sm text-sky-800">These parcels arrived at the warehouse and are waiting for your review.</p>
+  </div>
+  {% endif %}
+  {% if active_status == 'negotiating' and order_groups %}
+  <div class="px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2">
+    <svg class="w-4 h-4 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+    <p class="text-sm text-amber-800">Negotiations in progress. Check each parcel to see if admin has responded.</p>
+  </div>
+  {% endif %}
+
+  <!-- Order cards -->
+  {% if not order_groups %}
+  <div class="bg-white border border-gray-100 rounded-xl shadow-sm px-6 py-12 text-center text-gray-400">
+    <p class="text-3xl mb-2">📭</p>
+    <p>No parcels{% if active_status == 'archive' %} in archive{% endif %}</p>
+  </div>
+  {% endif %}
+
+  {% for order_id, group in order_groups %}
+  {% set first = group[0] %}
+
+  {# Primary status = lowest-priority status in the group for coloring #}
+  {% set has_delivered = group | selectattr('status', 'eq', 'delivered') | list | length > 0 %}
+  {% set has_negotiating = group | selectattr('status', 'eq', 'negotiating') | list | length > 0 %}
+  {% set has_ready = group | selectattr('status', 'eq', 'ready_to_pay') | list | length > 0 %}
+  {% set has_paid = group | selectattr('status', 'equalto', 'paid') | list | length > 0 %}
+
+  {% if has_delivered %}{% set primary_status = 'delivered' %}
+  {% elif has_negotiating %}{% set primary_status = 'negotiating' %}
+  {% elif has_ready %}{% set primary_status = 'ready_to_pay' %}
+  {% elif has_paid %}{% set primary_status = 'paid' %}
+  {% else %}{% set primary_status = first.status %}{% endif %}
+
+  {% if primary_status == 'delivered' %}{% set border_color = 'border-sky-400' %}
+  {% elif primary_status == 'negotiating' %}{% set border_color = 'border-amber-400' %}
+  {% elif primary_status == 'in_transit' %}{% set border_color = 'border-yellow-400' %}
+  {% elif primary_status == 'ready_to_pay' %}{% set border_color = 'border-green-400' %}
+  {% elif primary_status == 'paid' %}{% set border_color = 'border-indigo-400' %}
+  {% else %}{% set border_color = 'border-gray-200' %}{% endif %}
+
+  <div class="bg-white border border-gray-100 rounded-xl shadow-sm border-l-4 {{ border_color }} hover:shadow-md transition-shadow">
+    <a href="/portal/parcels/{{ first.id }}" class="block px-5 py-4">
+      <div class="flex items-start justify-between gap-4">
+        <!-- Left: info -->
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2 flex-wrap mb-1">
+            <span class="font-medium text-gray-800 text-sm">#{{ first.id }}</span>
+            {% if first.asin %}
+            <span class="font-mono text-xs text-gray-500 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded">{{ first.asin }}</span>
+            {% endif %}
+            {% if first.quantity %}
+            <span class="text-xs text-gray-400">qty {{ first.quantity }}</span>
+            {% endif %}
+          </div>
+          {% if first.title %}
+          <p class="text-xs text-gray-500 truncate mb-2">{{ first.title }}</p>
+          {% endif %}
+
+          <!-- Track pills -->
+          <div class="flex flex-wrap gap-1.5">
+            {% for p in group %}
+            {% if p.status == 'in_transit' %}{% set pill_dot = 'bg-yellow-400' %}
+            {% elif p.status == 'delivered' %}{% set pill_dot = 'bg-sky-500' %}
+            {% elif p.status == 'negotiating' %}{% set pill_dot = 'bg-amber-400' %}
+            {% elif p.status == 'ready_to_pay' %}{% set pill_dot = 'bg-green-500' %}
+            {% elif p.status == 'paid' %}{% set pill_dot = 'bg-indigo-400' %}
+            {% else %}{% set pill_dot = 'bg-gray-300' %}{% endif %}
+            <span class="inline-flex items-center gap-1 font-mono text-xs bg-gray-50 border border-gray-200 text-gray-600 px-2 py-0.5 rounded-full">
+              <span class="w-1.5 h-1.5 rounded-full shrink-0 {{ pill_dot }}"></span>
+              {{ p.tracking_number }}
+            </span>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Right: status + CTA -->
+        <div class="shrink-0 flex flex-col items-end gap-2">
+          <span class="text-xs px-2 py-1 rounded-full font-medium {{ STATUS_COLORS.get(primary_status, '') }}">
+            {{ STATUS_LABELS.get(primary_status, primary_status) }}
+          </span>
+          {% if first.purchase_price is not none %}
+          <span class="text-sm font-semibold text-gray-800">${{ "%.2f"|format(first.purchase_price) }}</span>
+          {% elif first.amazon_price %}
+          <span class="text-xs text-gray-400">Buy box ${{ "%.2f"|format(first.amazon_price) }}</span>
+          {% endif %}
+
+          {% if has_delivered %}
+          <span class="text-xs font-medium px-3 py-1.5 bg-sky-600 text-white rounded-lg">Review →</span>
+          {% elif has_negotiating %}
+            {% set needs_response = group | selectattr('status', 'eq', 'negotiating') | list | selectattr('negotiations') | list %}
+            {% if needs_response and needs_response[0].negotiations[-1].actor == 'admin' %}
+            <span class="text-xs font-medium px-3 py-1.5 bg-amber-500 text-white rounded-lg">Respond →</span>
+            {% else %}
+            <span class="text-xs text-amber-600 font-medium">Waiting…</span>
+            {% endif %}
+          {% else %}
+          <span class="text-xs text-indigo-600 font-medium">Details →</span>
+          {% endif %}
+
+          {% if first.arrived_at %}
+          <span class="text-xs text-gray-400">{{ first.arrived_at.strftime('%d.%m.%Y') }}</span>
+          {% elif first.created_at %}
+          <span class="text-xs text-gray-400">{{ first.created_at.strftime('%d.%m.%Y') }}</span>
+          {% endif %}
+        </div>
+      </div>
     </a>
   </div>
+  {% endfor %}
 
-  <!-- Search -->
-  <form method="get" action="/portal/parcels" class="flex gap-2 items-center px-4 py-3 border-b border-gray-100">
-    {% if active_status %}<input type="hidden" name="status" value="{{ active_status }}" />{% endif %}
-    <input type="text" name="q" value="{{ q }}"
-           placeholder="Tracking number or ASIN…"
-           class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
-    <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm px-4 py-2 rounded-lg transition-colors shrink-0">Search</button>
-    {% if q %}<a href="/portal/parcels{% if active_status %}?status={{ active_status }}{% endif %}" class="text-sm text-gray-400 hover:text-gray-600 px-1 py-2">✕</a>{% endif %}
-  </form>
-
-  <!-- Delivered call-to-action banner -->
-  {% if active_status == 'delivered' and parcels %}
-  <div class="px-5 py-3 bg-sky-50 border-b border-sky-100 flex items-center gap-2">
-    <svg class="w-4 h-4 text-sky-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 3l9 16H3L12 3z"/></svg>
-    <p class="text-sm text-sky-800">These parcels arrived at the warehouse and are waiting for your review. Click on a parcel to process it.</p>
-  </div>
-  {% endif %}
-
-  <!-- Negotiating banner -->
-  {% if active_status == 'negotiating' and parcels %}
-  <div class="px-5 py-3 bg-amber-50 border-b border-amber-100 flex items-center gap-2">
-    <svg class="w-4 h-4 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
-    <p class="text-sm text-amber-800">Negotiations in progress. Check each parcel to see if the supplier has responded.</p>
-  </div>
-  {% endif %}
-
-  <!-- Table -->
-  <div class="overflow-x-auto">
-    <table class="w-full text-sm">
-      <thead class="bg-gray-50 text-xs uppercase text-gray-500 font-semibold tracking-wide">
-        <tr>
-          <th class="px-4 py-3 text-left">Tracking Number</th>
-          <th class="px-4 py-3 text-left hidden sm:table-cell">Order ID</th>
-          <th class="px-4 py-3 text-left hidden sm:table-cell">ASIN</th>
-          <th class="px-4 py-3 text-left">Status</th>
-          {% if active_status == 'archive' %}
-          <th class="px-4 py-3 text-left">Payment Date</th>
-          {% else %}
-          <th class="px-4 py-3 text-left hidden md:table-cell">Added</th>
-          {% endif %}
-          <th class="px-4 py-3"></th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-gray-50">
-        {% for p in parcels %}
-        <tr class="hover:bg-gray-50 transition-colors">
-          <td class="px-4 py-3">
-            <p class="font-mono font-medium text-gray-800 text-xs">{{ p.tracking_number }}</p>
-            {% if p.title %}<p class="text-xs text-gray-400 truncate max-w-[180px]">{{ p.title }}</p>{% endif %}
-          </td>
-          <td class="px-4 py-3 font-mono text-xs text-gray-500 hidden sm:table-cell">{{ p.external_order_id or "—" }}</td>
-          <td class="px-4 py-3 font-mono text-xs text-gray-500 hidden sm:table-cell">{{ p.asin or "—" }}</td>
-          <td class="px-4 py-3">
-            <span class="text-xs px-2 py-1 rounded-full font-medium {{ STATUS_COLORS.get(p.status, '') }}">
-              {{ STATUS_LABELS.get(p.status, p.status) }}
-            </span>
-            {% if p.status == 'in_transit' and p.estimated_delivery_at %}
-            <p class="text-xs text-gray-400 mt-0.5">Est. {{ p.estimated_delivery_at.strftime('%d.%m.%Y') }}</p>
-            {% endif %}
-            {% if p.status == 'negotiating' and p.negotiations %}
-              {% if p.negotiations[-1].actor == 'admin' %}
-              <p class="text-xs text-amber-600 font-medium mt-0.5">Supplier responded</p>
-              {% else %}
-              <p class="text-xs text-gray-400 mt-0.5">Waiting for supplier</p>
-              {% endif %}
-            {% endif %}
-          </td>
-          {% if active_status == 'archive' %}
-          <td class="px-4 py-3 text-xs font-medium text-gray-600">{{ p.payment_report_date or "—" }}</td>
-          {% else %}
-          <td class="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">{{ p.created_at.strftime('%d.%m.%Y') if p.created_at else "—" }}</td>
-          {% endif %}
-          <td class="px-4 py-3 text-right">
-            {% if p.status == 'delivered' %}
-            <a href="/portal/parcels/{{ p.id }}" class="text-xs font-medium px-3 py-1.5 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors">Review →</a>
-            {% elif p.status == 'negotiating' and p.negotiations and p.negotiations[-1].actor == 'admin' %}
-            <a href="/portal/parcels/{{ p.id }}" class="text-xs font-medium px-3 py-1.5 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors">Respond →</a>
-            {% else %}
-            <a href="/portal/parcels/{{ p.id }}" class="text-indigo-600 hover:underline text-xs font-medium">Details →</a>
-            {% endif %}
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="6" class="px-4 py-12 text-center text-gray-400">
-          <p class="text-2xl mb-2">📭</p>
-          <p>No parcels{% if active_status == 'archive' %} in archive{% endif %}</p>
-        </td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
 </div>
 {% endblock %}

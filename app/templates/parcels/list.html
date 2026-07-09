@@ -36,7 +36,22 @@
 {% set active_total = counts.get('unidentified',0) + counts.get('in_transit',0) + counts.get('delivered',0) + counts.get('negotiating',0) + counts.get('ready_to_pay',0) + counts.get('forwarding',0) + counts.get('return_to_supplier',0) %}
 {% set archive_total = counts.get('paid',0) + counts.get('sold',0) + counts.get('ignored',0) %}
 
-<div x-data="bulkSelect()" class="space-y-3">
+<div x-data="Object.assign(bulkSelect(), exportCols('parcel_export_admin', [
+  {id:'tracking_number', label:'Tracking #'},
+  {id:'external_order_id', label:'Order ID'},
+  {id:'asin', label:'ASIN'},
+  {id:'title', label:'Product Title'},
+  {id:'quantity', label:'Qty'},
+  {id:'status', label:'Status'},
+  {id:'supplier', label:'Supplier'},
+  {id:'client', label:'Client'},
+  {id:'created_at', label:'Added'},
+  {id:'arrived_at', label:'Arrived'},
+  {id:'purchase_price', label:'Cost ($)'},
+  {id:'amazon_price', label:'Buy Box ($)'},
+  {id:'weight_kg', label:'Weight (kg)'},
+  {id:'id', label:'ID'}
+]))" class="space-y-3">
 
 <!-- Status filter pills -->
 <div class="flex items-center gap-2 flex-wrap">
@@ -80,7 +95,7 @@
 {% endif %}
 
 <!-- Search / filter bar -->
-{% set has_filters = q or client_filter or supplier_filter %}
+{% set has_filters = q or client_filter or supplier_filter or date_from or date_to %}
 <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
   <form method="get" action="/parcels" class="flex gap-2 items-center px-4 py-3 flex-wrap">
     {% if active_status %}<input type="hidden" name="status" value="{{ active_status }}" />{% endif %}
@@ -107,11 +122,86 @@
       {% endfor %}
     </select>
     {% endif %}
+    <input type="date" name="date_from" value="{{ date_from }}" title="From date"
+           class="border {% if date_from %}border-indigo-400 text-indigo-700{% else %}border-gray-200 text-gray-600{% endif %} rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+    <input type="date" name="date_to" value="{{ date_to }}" title="To date"
+           class="border {% if date_to %}border-indigo-400 text-indigo-700{% else %}border-gray-200 text-gray-600{% endif %} rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
     <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm px-4 py-2 rounded-lg transition-colors shrink-0">Search</button>
     {% if has_filters %}
     <a href="/parcels{% if active_status %}?status={{ active_status }}{% endif %}" class="text-sm text-gray-400 hover:text-red-500 transition-colors px-1" title="Clear filters">✕</a>
     {% endif %}
   </form>
+  <!-- Export row -->
+  <div class="flex items-center justify-between px-4 py-2 border-t border-gray-100">
+    <span class="text-xs text-gray-400">{{ parcels | length }} parcel(s) matching filters</span>
+    <button @click="exportOpen = true"
+            class="inline-flex items-center gap-1.5 text-sm text-indigo-600 hover:text-indigo-700 font-medium transition-colors">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      Export to Excel
+    </button>
+  </div>
+</div>
+
+<!-- Column picker modal -->
+<div x-show="exportOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center p-4"
+     @keydown.escape.window="exportOpen = false">
+  <div class="absolute inset-0 bg-black/40" @click="exportOpen = false"></div>
+  <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" @click.stop>
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h2 class="text-base font-semibold text-gray-900">Export to Excel</h2>
+      <button @click="exportOpen = false" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="px-6 py-5 grid grid-cols-1 sm:grid-cols-2 gap-6">
+      <!-- Left: available columns -->
+      <div>
+        <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Available Columns</p>
+        <div class="space-y-1.5">
+          <template x-for="col in allCols" :key="col.id">
+            <label class="flex items-center gap-2.5 cursor-pointer group">
+              <input type="checkbox" :checked="isSelected(col.id)" @change="toggle(col.id)"
+                     class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400" />
+              <span class="text-sm text-gray-700 group-hover:text-indigo-600 transition-colors" x-text="col.label"></span>
+            </label>
+          </template>
+        </div>
+      </div>
+      <!-- Right: selected order -->
+      <div>
+        <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Column Order</p>
+        <div class="space-y-1.5 min-h-[120px]">
+          <template x-if="selectedCols.length === 0">
+            <p class="text-sm text-gray-400 italic">No columns selected</p>
+          </template>
+          <template x-for="(colId, idx) in selectedCols" :key="colId">
+            <div class="flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-1.5">
+              <span class="text-sm text-indigo-800 flex-1" x-text="labelOf(colId)"></span>
+              <button @click="moveUp(idx)" :disabled="idx === 0"
+                      class="text-indigo-400 hover:text-indigo-600 disabled:opacity-30 transition-colors p-0.5">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7"/></svg>
+              </button>
+              <button @click="moveDown(idx)" :disabled="idx === selectedCols.length - 1"
+                      class="text-indigo-400 hover:text-indigo-600 disabled:opacity-30 transition-colors p-0.5">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
+              </button>
+              <button @click="toggle(colId)" class="text-indigo-300 hover:text-red-500 transition-colors p-0.5">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+          </template>
+        </div>
+        <p class="text-xs text-gray-400 mt-3">Your column selection is saved automatically.</p>
+      </div>
+    </div>
+    <div class="px-6 pb-5 flex justify-end gap-3">
+      <button @click="exportOpen = false" class="px-4 py-2 border border-gray-200 text-gray-600 text-sm rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+      <button @click="doExport()" :disabled="selectedCols.length === 0"
+              class="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-sm font-semibold rounded-lg transition-colors">
+        Download
+      </button>
+    </div>
+  </div>
 </div>
 
 <!-- Parcel cards -->
@@ -353,5 +443,6 @@ function bulkSelect() {
     }
   }
 }
+
 </script>
 {% endblock %}

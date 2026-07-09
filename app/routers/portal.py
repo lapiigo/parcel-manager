@@ -1,9 +1,10 @@
 """Client portal — accessible only by users with role='client'."""
+import io
 import os
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, Depends, Request, Form, UploadFile, File
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, Request, Form, UploadFile, File, Query
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -120,8 +121,12 @@ def portal_dashboard(
 @router.get("/parcels", response_class=HTMLResponse)
 def portal_parcels(
     request: Request,
-    status: str = "",
-    q: str = "",
+    status: str = Query(""),
+    q: str = Query(""),
+    date_from: str = Query(""),
+    date_to: str = Query(""),
+    export: str = Query(""),
+    cols: str = Query(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_client),
 ):
@@ -139,7 +144,7 @@ def portal_parcels(
                 Parcel.tracking_number.contains(q.strip()) |
                 (Parcel.asin == q_upper)
             )
-        parcels = query.order_by(Parcel.payment_report_date.desc(), Parcel.created_at.desc()).all()
+        parcels_flat = query.order_by(Parcel.payment_report_date.desc(), Parcel.created_at.desc()).all()
     else:
         query = base.filter(
             Parcel.payment_report_date.is_(None),
@@ -153,7 +158,32 @@ def portal_parcels(
                 Parcel.tracking_number.contains(q.strip()) |
                 (Parcel.asin == q_upper)
             )
-        parcels = query.order_by(Parcel.created_at.desc()).all()
+        if date_from:
+            try:
+                query = query.filter(Parcel.created_at >= datetime.strptime(date_from, "%Y-%m-%d"))
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                dt_end = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                query = query.filter(Parcel.created_at <= dt_end)
+            except ValueError:
+                pass
+        parcels_flat = query.order_by(Parcel.created_at.desc()).all()
+
+    if export == "1":
+        from app.routers.parcels import _export_parcels_excel
+        return _export_parcels_excel(parcels_flat, cols, is_admin=False)
+
+    # Group by external_order_id (same as admin list)
+    order_groups: list[tuple] = []
+    _seen: dict = {}
+    for p in parcels_flat:
+        key = p.external_order_id or f"__solo_{p.id}"
+        if key not in _seen:
+            _seen[key] = []
+            order_groups.append((p.external_order_id, _seen[key]))
+        _seen[key].append(p)
 
     counts = {}
     active = base.filter(Parcel.payment_report_date.is_(None), Parcel.status != "forwarding")
@@ -161,16 +191,21 @@ def portal_parcels(
         counts[s] = active.filter(Parcel.status == s).count()
     counts["archive"] = base.filter(Parcel.payment_report_date.isnot(None)).count()
 
+    client_pct = round((client.cost_coefficient or 0.45) * 100) if client else 45
+
     return templates.TemplateResponse(
         request,
         "portal/parcels.html",
         {
             "current_user": current_user,
             "client": client,
-            "parcels": parcels,
+            "order_groups": order_groups,
             "active_status": status,
             "counts": counts,
             "q": q,
+            "date_from": date_from,
+            "date_to": date_to,
+            "client_pct": client_pct,
             "STATUS_LABELS": STATUS_LABELS,
             "STATUS_COLORS": STATUS_COLORS,
         },
@@ -191,10 +226,29 @@ def portal_parcel_detail(
     if not parcel:
         return RedirectResponse("/portal/parcels", status_code=302)
 
-    # Determine if client can add another negotiation round
+    # Siblings = other parcels in the same order
+    siblings: list = []
+    if parcel.external_order_id:
+        siblings = (
+            db.query(Parcel)
+            .filter(
+                Parcel.external_order_id == parcel.external_order_id,
+                Parcel.id != parcel.id,
+                Parcel.client_id == client.id,
+            )
+            .order_by(Parcel.id)
+            .all()
+        )
+
+    all_tracks = [parcel] + siblings
+
+    # Determine if client can add another negotiation round for main parcel
     can_negotiate = False
     if parcel.status == "negotiating" and parcel.negotiations:
         can_negotiate = parcel.negotiations[-1].actor == "admin"
+
+    client_pct = round((client.cost_coefficient or 0.45) * 100)
+    amazon_price = parcel.amazon_price or 0
 
     return templates.TemplateResponse(
         request,
@@ -203,7 +257,10 @@ def portal_parcel_detail(
             "current_user": current_user,
             "client": client,
             "parcel": parcel,
+            "all_tracks": all_tracks,
             "can_negotiate": can_negotiate,
+            "client_pct": client_pct,
+            "amazon_price": amazon_price,
             "STATUS_LABELS": STATUS_LABELS,
             "STATUS_COLORS": STATUS_COLORS,
             "CLIENT_ACTION_LABELS": CLIENT_ACTION_LABELS,
@@ -217,6 +274,8 @@ async def portal_process_parcel(
     parcel_id: int,
     action: str = Form(...),
     discount: str = Form(""),
+    asin_override: str = Form(""),
+    qty_override: str = Form(""),
     notes: str = Form(""),
     photos: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
@@ -234,6 +293,15 @@ async def portal_process_parcel(
     if discount:
         try:
             discount_val = float(discount)
+        except ValueError:
+            pass
+
+    # Apply ASIN/qty override for wrong_item cases (client specifies what actually arrived)
+    if asin_override.strip():
+        parcel.asin = asin_override.strip().upper()
+    if qty_override.strip():
+        try:
+            parcel.quantity = int(qty_override.strip())
         except ValueError:
             pass
 
