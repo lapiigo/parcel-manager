@@ -11,8 +11,10 @@ Handles UPS tracking numbers starting with 1Z.
 
 from __future__ import annotations
 
-from datetime import datetime
+import os
+from datetime import datetime, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
@@ -42,16 +44,23 @@ def make_session() -> requests.Session:
     return s
 
 
+def _warehouse_tz() -> ZoneInfo:
+    """Return the warehouse timezone from WAREHOUSE_TIMEZONE env var."""
+    tz_name = os.getenv("WAREHOUSE_TIMEZONE", "America/New_York")
+    try:
+        return ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("America/New_York")
+
+
 def _parse_dt(date_str: str, time_str: str = "") -> Optional[datetime]:
     """
-    Parse UPS delivery date/time and return end-of-day UTC.
+    Parse UPS delivery date/time and return naive UTC datetime.
 
-    UPS gives local recipient time, which we can't reliably convert to UTC
-    without knowing the delivery timezone. To avoid underestimating the
-    Keepa lookup time, we normalize to 23:59:59 of the delivery date —
-    Keepa's _price_at finds the last known price *at or before* this
-    timestamp, so end-of-day gives the correct price for the delivery day
-    regardless of what local timezone UPS used.
+    UPS reports local time of the delivery location. Since all parcels are
+    delivered to our US warehouse, we interpret UPS time as the warehouse
+    local timezone (WAREHOUSE_TIMEZONE env var, default America/New_York),
+    then convert to UTC so Keepa gets the exact correct price timestamp.
     """
     combined = f"{date_str} {time_str}".strip()
     parsed: Optional[datetime] = None
@@ -70,8 +79,9 @@ def _parse_dt(date_str: str, time_str: str = "") -> Optional[datetime]:
             continue
     if parsed is None:
         return None
-    # Normalize to end-of-day so Keepa always finds the delivery-day price
-    return parsed.replace(hour=23, minute=59, second=59, microsecond=0)
+    # Attach warehouse local timezone, then convert to naive UTC
+    local_dt = parsed.replace(tzinfo=_warehouse_tz())
+    return local_dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def get_tracking_status(
