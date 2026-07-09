@@ -44,14 +44,6 @@
         <dt class="text-gray-400">Added</dt>
         <dd class="font-medium text-gray-700">{{ parcel.created_at.strftime('%d.%m.%Y') if parcel.created_at else "—" }}</dd>
       </div>
-      {% if parcel.arrived_at %}
-      <div>
-        <dt class="text-gray-400">Arrived at Warehouse</dt>
-        <dd class="font-medium text-gray-700">
-          <time class="local-time" datetime="{{ parcel.arrived_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ parcel.arrived_at.strftime('%d.%m.%Y %H:%M') }}</time>
-        </dd>
-      </div>
-      {% endif %}
     </dl>
   </div>
 
@@ -73,6 +65,7 @@
             <th class="px-4 py-3 text-left hidden sm:table-cell">ASIN</th>
             <th class="px-4 py-3 text-left hidden sm:table-cell">Qty</th>
             <th class="px-4 py-3 text-left">Status</th>
+            <th class="px-4 py-3 text-left hidden md:table-cell">Arrived</th>
             <th class="px-4 py-3 text-left hidden md:table-cell">Buy Box</th>
             <th class="px-4 py-3 text-left hidden md:table-cell">Cost</th>
             <th class="px-4 py-3"></th>
@@ -105,6 +98,15 @@
                 {% else %}
                 <p class="text-xs text-gray-400 mt-0.5">Waiting for admin</p>
                 {% endif %}
+              {% endif %}
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap hidden md:table-cell">
+              {% if t.arrived_at %}
+              <time class="local-time text-xs text-gray-700" datetime="{{ t.arrived_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ t.arrived_at.strftime('%d.%m.%Y %H:%M') }}</time>
+              {% elif t.estimated_delivery_at %}
+              <span class="text-xs text-sky-600 font-medium">Est. {{ t.estimated_delivery_at.strftime('%d.%m.%Y') }}</span>
+              {% else %}
+              <span class="text-xs text-gray-400">In transit</span>
               {% endif %}
             </td>
             <td class="px-4 py-3 text-xs text-gray-500 hidden md:table-cell">
