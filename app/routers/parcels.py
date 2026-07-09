@@ -65,6 +65,7 @@ def parcel_list(
     report: str = Query(""),
     sync_flash: str = Query(""),
     client_filter: str = Query(""),
+    supplier_filter: str = Query(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
@@ -85,6 +86,8 @@ def parcel_list(
         query = query.filter(Parcel.client_id.is_(None))
     elif client_filter:
         query = query.filter(Parcel.client_id == int(client_filter))
+    if supplier_filter:
+        query = query.filter(Parcel.supplier_id == int(supplier_filter))
     if q:
         q_stripped = q.strip()
         q_upper = q_stripped.upper()
@@ -94,7 +97,6 @@ def parcel_list(
             Parcel.external_order_id.contains(q_stripped)
         )
     from sqlalchemy import case
-    from collections import defaultdict
     parcels_flat = query.order_by(
         case((Parcel.external_order_id.is_(None), 1), else_=0),
         Parcel.external_order_id.asc(),
@@ -117,6 +119,7 @@ def parcel_list(
         counts[s] = base.filter(Parcel.status == s).count()
 
     clients = db.query(Client).order_by(Client.name).all() if current_user.role == "super_admin" or not current_user.client_id else []
+    suppliers = db.query(Supplier).order_by(Supplier.name).all()
 
     return templates.TemplateResponse(
         request,
@@ -129,10 +132,12 @@ def parcel_list(
             "counts": counts,
             "q": q,
             "client_filter": client_filter,
+            "supplier_filter": supplier_filter,
             "sync_flash": sync_flash,
             "STATUS_LABELS": STATUS_LABELS,
             "STATUS_COLORS": STATUS_COLORS,
             "clients": clients,
+            "suppliers": suppliers,
             "report": report,
             "can": can,
         },

@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ parcel.tracking_number }} — My Account{% endblock %}
 {% block heading %}{{ parcel.tracking_number }}{% endblock %}
-{% block header_actions %}<a href="/portal/parcels" class="text-sm text-gray-500 hover:text-gray-700">← Back</a>{% endblock %}
+{% block header_actions %}<a href="/portal/parcels"
+   onclick="if(document.referrer.includes('/portal/parcels') && !document.referrer.includes('/portal/parcels/')) { history.back(); return false; }"
+   class="text-sm text-gray-500 hover:text-gray-700">← Back</a>{% endblock %}
 
 {% block content %}
 <div class="space-y-5">

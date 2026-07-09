@@ -79,17 +79,18 @@
 </div>
 {% endif %}
 
-<!-- Search bar -->
+<!-- Search / filter bar -->
+{% set has_filters = q or client_filter or supplier_filter %}
 <div class="bg-white rounded-xl border border-gray-200 shadow-sm">
   <form method="get" action="/parcels" class="flex gap-2 items-center px-4 py-3 flex-wrap">
     {% if active_status %}<input type="hidden" name="status" value="{{ active_status }}" />{% endif %}
     <input type="checkbox" :checked="allSelected" @change="toggleAll($event)"
            class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-400 cursor-pointer shrink-0" title="Select all" />
     <input type="text" name="q" value="{{ q }}" placeholder="Order ID, tracking, ASIN…"
-           class="flex-1 min-w-0 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+           class="flex-1 min-w-[140px] border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
     {% if clients %}
     <select name="client_filter" onchange="this.form.submit()"
-            class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 text-gray-600">
+            class="border {% if client_filter %}border-indigo-400 text-indigo-700{% else %}border-gray-200 text-gray-600{% endif %} rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
       <option value="">All clients</option>
       <option value="unassigned" {% if client_filter == 'unassigned' %}selected{% endif %}>— Unassigned —</option>
       {% for c in clients %}
@@ -97,8 +98,19 @@
       {% endfor %}
     </select>
     {% endif %}
+    {% if suppliers %}
+    <select name="supplier_filter" onchange="this.form.submit()"
+            class="border {% if supplier_filter %}border-indigo-400 text-indigo-700{% else %}border-gray-200 text-gray-600{% endif %} rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
+      <option value="">All suppliers</option>
+      {% for s in suppliers %}
+      <option value="{{ s.id }}" {% if supplier_filter == s.id|string %}selected{% endif %}>{{ s.name }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
     <button type="submit" class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm px-4 py-2 rounded-lg transition-colors shrink-0">Search</button>
-    {% if q or client_filter %}<a href="/parcels{% if active_status %}?status={{ active_status }}{% endif %}" class="text-sm text-gray-400 hover:text-gray-600 px-2">✕</a>{% endif %}
+    {% if has_filters %}
+    <a href="/parcels{% if active_status %}?status={{ active_status }}{% endif %}" class="text-sm text-gray-400 hover:text-red-500 transition-colors px-1" title="Clear filters">✕</a>
+    {% endif %}
   </form>
 </div>
 
@@ -123,7 +135,7 @@
       {% endfor %}
     </div>
 
-    <!-- Main content → click goes to parcel detail -->
+    <!-- Main content → click goes to parcel detail, preserve filters via referrer -->
     <a href="/parcels/{{ first.id }}" class="flex-1 min-w-0 flex items-start gap-4 flex-wrap">
 
       <!-- Left: order/parcel info -->
