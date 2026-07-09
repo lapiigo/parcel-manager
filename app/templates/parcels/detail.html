@@ -100,7 +100,7 @@
             {% if parcel.is_returned %}<span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Returned</span>
             {% else %}<span class="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">Pending return</span>{% endif %}
           {% endif %}
-          {% if current_user.role in ('super_admin', 'admin') and parcel.status in ('unidentified', 'in_transit') %}
+          {% if current_user.role in ('super_admin', 'admin') and parcel.status not in ('ignored', 'forwarding', 'return_to_supplier', 'sold') %}
           <form method="post" action="/parcels/{{ parcel.id }}/status" class="inline"
                 onsubmit="return confirm('Mark parcel as Ignored?')">
             <input type="hidden" name="new_status" value="ignored" />

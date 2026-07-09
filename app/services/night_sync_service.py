@@ -5,38 +5,36 @@ Scheduled at 02:00 UTC via systemd timer.
 
 Flow:
 1. Query all in_transit parcels with UPS tracking (starts with 1Z).
-2. For each, call UPS browser-emulation tracking (2-3 tracks/sec).
+2. For each, call UPS browser-emulation tracking (~2 tracks/sec).
 3. Mark delivered parcels via transition_parcel().
 4. Immediately try Keepa price update for delivered parcels.
-5. If Keepa tokens exhausted mid-way, store remaining parcels and retry
-   every 30 min in the same background task until done or 6-hour deadline.
+5. If Keepa tokens exhausted, retry every 30 min up to 6-hour deadline.
+6. Send Telegram report when done.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.database import SessionLocal
 from app.models.parcel import Parcel
 from app.services import keepa_service
 from app.services.parcel_service import transition_parcel
+from app.services.telegram_service import send_telegram_message
 from app.services.ups_service import UPSError, get_tracking_status, make_session
 
 logger = logging.getLogger("night_sync")
 
 _SLEEP_BETWEEN_REQUESTS = 0.45  # ~2.2 tracks/sec
 _KEEPA_RETRY_SLEEP = 1800       # 30 min between Keepa retry attempts
-_KEEPA_DEADLINE_HOURS = 6       # give up after 6 hours from start
+_KEEPA_DEADLINE_HOURS = 6       # give up on Keepa after 6 hours from start
 
 
 def _apply_keepa(parcel: Parcel, db) -> bool:
-    """
-    Fetch Keepa price for parcel and persist.  Returns True on success.
-    Caller must check has_tokens() before calling.
-    """
+    """Fetch Keepa price for parcel and persist. Returns True on success."""
     if not parcel.asin:
         return False
     try:
@@ -56,12 +54,42 @@ def _apply_keepa(parcel: Parcel, db) -> bool:
         return False
 
 
+def _send_report(stats: dict, started_at: datetime, finished_at: datetime) -> None:
+    start_str = started_at.strftime("%d.%m.%Y %H:%M UTC")
+    end_str = finished_at.strftime("%H:%M UTC")
+    duration_min = int((finished_at - started_at).total_seconds() / 60)
+
+    ups_ok = stats["ups_checked"] - stats["ups_errors"]
+
+    lines = [
+        "🌙 <b>Night UPS Sync Report</b>",
+        "",
+        f"⏱ {start_str} → {end_str} ({duration_min} min)",
+        "",
+        "<b>UPS tracking</b>",
+        f"  📦 Checked: {stats['ups_checked']}",
+        f"  ✅ Successful: {ups_ok}",
+        f"  🚚 Marked delivered: {stats['ups_delivered']}",
+        f"  ❌ Errors: {stats['ups_errors']}",
+        "",
+        "<b>Keepa price update</b>",
+        f"  💰 Updated: {stats['keepa_updated']}",
+        f"  ⏳ Skipped / no tokens: {stats['keepa_skipped']}",
+    ]
+
+    if stats.get("keepa_deadline_hit"):
+        lines.append("  ⚠️ Keepa deadline reached — some prices not updated")
+
+    send_telegram_message("\n".join(lines))
+
+
 def run_night_sync() -> dict:
     """
     Entry point called as FastAPI background task.
     Creates its own DB session (safe to call from background thread).
     """
     db = SessionLocal()
+    started_at = datetime.now(timezone.utc).replace(tzinfo=None)
     start_time = time.time()
 
     stats = {
@@ -70,6 +98,7 @@ def run_night_sync() -> dict:
         "ups_errors": 0,
         "keepa_updated": 0,
         "keepa_skipped": 0,
+        "keepa_deadline_hit": False,
     }
 
     try:
@@ -85,7 +114,7 @@ def run_night_sync() -> dict:
 
         logger.info("Night sync: %d UPS parcels to check", len(parcels))
         session = make_session()
-        need_keepa: list[int] = []  # parcel IDs that need Keepa update
+        need_keepa: list[int] = []
 
         for parcel in parcels:
             stats["ups_checked"] += 1
@@ -114,11 +143,10 @@ def run_night_sync() -> dict:
 
         while need_keepa and time.time() < deadline:
             if not keepa_service.has_tokens():
-                remaining = len(need_keepa)
                 logger.info(
-                    "Keepa tokens exhausted, %d parcels deferred. Sleeping 30 min.", remaining
+                    "Keepa tokens exhausted, %d parcels deferred. Sleeping 30 min.",
+                    len(need_keepa),
                 )
-                stats["keepa_skipped"] = remaining
                 time.sleep(_KEEPA_RETRY_SLEEP)
                 continue
 
@@ -133,20 +161,26 @@ def run_night_sync() -> dict:
 
             if _apply_keepa(parcel, db):
                 stats["keepa_updated"] += 1
-                stats["keepa_skipped"] = max(0, stats["keepa_skipped"] - 1)
             else:
                 stats["keepa_skipped"] += 1
 
         if need_keepa:
-            stats["keepa_skipped"] = len(need_keepa)
-            logger.warning(
-                "Night sync deadline reached, %d parcels still need Keepa.", len(need_keepa)
-            )
+            stats["keepa_skipped"] += len(need_keepa)
+            stats["keepa_deadline_hit"] = True
+            logger.warning("Night sync deadline reached, %d parcels still need Keepa.", len(need_keepa))
 
     except Exception as exc:
         logger.exception("Night sync failed unexpectedly: %s", exc)
+        stats["ups_errors"] = stats.get("ups_errors", 0) + 1
     finally:
         db.close()
 
+    finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
     logger.info("Night sync complete: %s", stats)
+
+    try:
+        _send_report(stats, started_at, finished_at)
+    except Exception as exc:
+        logger.warning("Failed to send Telegram report: %s", exc)
+
     return stats

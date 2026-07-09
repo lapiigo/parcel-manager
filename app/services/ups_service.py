@@ -43,7 +43,18 @@ def make_session() -> requests.Session:
 
 
 def _parse_dt(date_str: str, time_str: str = "") -> Optional[datetime]:
+    """
+    Parse UPS delivery date/time and return end-of-day UTC.
+
+    UPS gives local recipient time, which we can't reliably convert to UTC
+    without knowing the delivery timezone. To avoid underestimating the
+    Keepa lookup time, we normalize to 23:59:59 of the delivery date —
+    Keepa's _price_at finds the last known price *at or before* this
+    timestamp, so end-of-day gives the correct price for the delivery day
+    regardless of what local timezone UPS used.
+    """
     combined = f"{date_str} {time_str}".strip()
+    parsed: Optional[datetime] = None
     for fmt in (
         "%m/%d/%Y %I:%M %p",
         "%m/%d/%Y %H:%M",
@@ -53,10 +64,14 @@ def _parse_dt(date_str: str, time_str: str = "") -> Optional[datetime]:
         "%Y-%m-%d",
     ):
         try:
-            return datetime.strptime(combined, fmt)
+            parsed = datetime.strptime(combined, fmt)
+            break
         except ValueError:
             continue
-    return None
+    if parsed is None:
+        return None
+    # Normalize to end-of-day so Keepa always finds the delivery-day price
+    return parsed.replace(hour=23, minute=59, second=59, microsecond=0)
 
 
 def get_tracking_status(
