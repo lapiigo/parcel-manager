@@ -4,17 +4,18 @@ UPS tracking via direct browser-emulation (no API key required).
 Flow:
 1. GET tracking page → picks up session cookies incl. XSRF token
 2. POST to UPS internal API with the XSRF token
-3. Parse packageStatus / deliveredDate from response
+3. Parse packageStatus + deliveredDate/Time + gmtOffset from response
+4. Convert local UPS time → UTC using the gmtOffset UPS provides
 
-Handles UPS tracking numbers starting with 1Z.
+UPS always returns local time at the delivery location and typically
+includes a gmtOffset field (e.g. "-04:00") in the response.
+We use that offset for exact UTC conversion passed to Keepa.
 """
 
 from __future__ import annotations
 
-import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
@@ -44,23 +45,38 @@ def make_session() -> requests.Session:
     return s
 
 
-def _warehouse_tz() -> ZoneInfo:
-    """Return the warehouse timezone from WAREHOUSE_TIMEZONE env var."""
-    tz_name = os.getenv("WAREHOUSE_TIMEZONE", "America/New_York")
-    try:
-        return ZoneInfo(tz_name)
-    except ZoneInfoNotFoundError:
-        return ZoneInfo("America/New_York")
-
-
-def _parse_dt(date_str: str, time_str: str = "") -> Optional[datetime]:
+def _parse_gmt_offset(offset_str: str) -> Optional[timedelta]:
     """
-    Parse UPS delivery date/time and return naive UTC datetime.
+    Parse UPS gmtOffset into a timedelta.
+    Handles: "-04:00", "-4", "+5:30", "-0500", "4", "-04", etc.
+    Returns None if offset_str is empty or unparseable.
+    """
+    s = (offset_str or "").strip().replace(":", "")
+    if not s:
+        return None
+    try:
+        sign = -1 if s.startswith("-") else 1
+        s = s.lstrip("+-")
+        if len(s) <= 2:
+            return timedelta(hours=sign * int(s))
+        elif len(s) == 3:
+            return timedelta(hours=sign * int(s[:1]), minutes=sign * int(s[1:]))
+        elif len(s) == 4:
+            return timedelta(hours=sign * int(s[:2]), minutes=sign * int(s[2:]))
+        elif len(s) == 5:
+            return timedelta(hours=sign * int(s[:2]), minutes=sign * int(s[3:]))
+    except (ValueError, IndexError):
+        pass
+    return None
 
-    UPS reports local time of the delivery location. Since all parcels are
-    delivered to our US warehouse, we interpret UPS time as the warehouse
-    local timezone (WAREHOUSE_TIMEZONE env var, default America/New_York),
-    then convert to UTC so Keepa gets the exact correct price timestamp.
+
+def _to_utc(date_str: str, time_str: str, gmt_offset: Optional[timedelta]) -> Optional[datetime]:
+    """
+    Parse UPS date+time strings and convert to naive UTC datetime.
+
+    If gmt_offset is provided (from UPS response), uses it for exact conversion.
+    If gmt_offset is None (UPS didn't include it), returns naive datetime as-is
+    with no timezone assumption — caller should treat it as approximate.
     """
     combined = f"{date_str} {time_str}".strip()
     parsed: Optional[datetime] = None
@@ -77,11 +93,17 @@ def _parse_dt(date_str: str, time_str: str = "") -> Optional[datetime]:
             break
         except ValueError:
             continue
+
     if parsed is None:
         return None
-    # Attach warehouse local timezone, then convert to naive UTC
-    local_dt = parsed.replace(tzinfo=_warehouse_tz())
-    return local_dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+    if gmt_offset is not None:
+        # UPS gave us the local timezone offset — convert to exact UTC
+        local_tz = timezone(gmt_offset)
+        return parsed.replace(tzinfo=local_tz).astimezone(timezone.utc).replace(tzinfo=None)
+
+    # No offset info — return as-is (naive, approximate local time)
+    return parsed
 
 
 def get_tracking_status(
@@ -94,14 +116,13 @@ def get_tracking_status(
     Returns:
         {
             "delivered": bool,
-            "delivered_at": datetime | None,  # naive, UTC-approximate
-            "status": str,                    # raw status from UPS
+            "delivered_at": datetime | None,  # naive UTC if gmtOffset known, else approx local
+            "status": str,
         }
 
     Raises UPSError on network or parse failure.
     """
-    own_session = session is None
-    if own_session:
+    if session is None:
         session = make_session()
 
     tn = tracking_number.strip()
@@ -143,16 +164,16 @@ def get_tracking_status(
         raise UPSError(f"POST API failed: {exc}") from exc
 
     if resp.status_code != 200:
-        raise UPSError(f"UPS API HTTP {resp.status_code} for {tn}")
+        raise UPSError(f"UPS API HTTP {resp.status_code}")
 
     try:
         data = resp.json()
     except Exception as exc:
-        raise UPSError(f"Non-JSON UPS response for {tn}: {exc}") from exc
+        raise UPSError(f"Non-JSON UPS response: {exc}") from exc
 
     details = data.get("trackDetails") or []
     if not details:
-        raise UPSError(f"No trackDetails in UPS response for {tn}")
+        raise UPSError("No trackDetails in response")
 
     detail = details[0]
     status_str = (detail.get("packageStatus") or "").strip()
@@ -160,9 +181,33 @@ def get_tracking_status(
 
     delivered_at: Optional[datetime] = None
     if is_delivered:
-        delivered_at = _parse_dt(
+        # UPS typically provides gmtOffset in the top-level detail or in activity events
+        raw_offset = (
+            detail.get("gmtOffset")
+            or detail.get("gmtOffsetHours")
+            or detail.get("timeZoneOffset")
+            or ""
+        )
+        # Also check first activity event for offset if top-level missing
+        if not raw_offset:
+            activities = (
+                detail.get("shipmentProgressActivities")
+                or detail.get("activities")
+                or []
+            )
+            if activities:
+                raw_offset = (
+                    activities[0].get("gmtOffset")
+                    or activities[0].get("timeZoneOffset")
+                    or ""
+                )
+
+        gmt_offset = _parse_gmt_offset(str(raw_offset)) if raw_offset else None
+
+        delivered_at = _to_utc(
             detail.get("deliveredDate", ""),
             detail.get("deliveredTime", ""),
+            gmt_offset,
         )
 
     return {

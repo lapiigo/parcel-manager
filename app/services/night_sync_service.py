@@ -1,7 +1,7 @@
 """
 Nightly UPS delivery sync + Keepa price update.
 
-Scheduled at 02:00 UTC via systemd timer.
+Scheduled at 23:00 UTC (= 02:00 UTC+3 Ukraine) via systemd timer.
 
 Flow:
 1. Query all in_transit parcels with UPS tracking (starts with 1Z).
@@ -9,7 +9,7 @@ Flow:
 3. Mark delivered parcels via transition_parcel().
 4. Immediately try Keepa price update for delivered parcels.
 5. If Keepa tokens exhausted, retry every 30 min up to 6-hour deadline.
-6. Send Telegram report when done.
+6. Send Telegram report (incl. per-track errors) when done.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Optional
 
 from app.database import SessionLocal
 from app.models.parcel import Parcel
@@ -54,7 +53,12 @@ def _apply_keepa(parcel: Parcel, db) -> bool:
         return False
 
 
-def _send_report(stats: dict, started_at: datetime, finished_at: datetime) -> None:
+def _send_report(
+    stats: dict,
+    started_at: datetime,
+    finished_at: datetime,
+    errors: list[tuple[str, str]],
+) -> None:
     start_str = started_at.strftime("%d.%m.%Y %H:%M UTC")
     end_str = finished_at.strftime("%H:%M UTC")
     duration_min = int((finished_at - started_at).total_seconds() / 60)
@@ -67,18 +71,27 @@ def _send_report(stats: dict, started_at: datetime, finished_at: datetime) -> No
         f"⏱ {start_str} → {end_str} ({duration_min} min)",
         "",
         "<b>UPS tracking</b>",
-        f"  📦 Checked: {stats['ups_checked']}",
-        f"  ✅ Successful: {ups_ok}",
-        f"  🚚 Marked delivered: {stats['ups_delivered']}",
-        f"  ❌ Errors: {stats['ups_errors']}",
+        f"  📦 Перевірено: {stats['ups_checked']}",
+        f"  ✅ Успішно: {ups_ok}",
+        f"  🚚 Позначено доставленими: {stats['ups_delivered']}",
+        f"  ❌ Помилок: {stats['ups_errors']}",
         "",
-        "<b>Keepa price update</b>",
-        f"  💰 Updated: {stats['keepa_updated']}",
-        f"  ⏳ Skipped / no tokens: {stats['keepa_skipped']}",
+        "<b>Keepa ціни</b>",
+        f"  💰 Оновлено: {stats['keepa_updated']}",
+        f"  ⏳ Пропущено / немає токенів: {stats['keepa_skipped']}",
     ]
 
     if stats.get("keepa_deadline_hit"):
-        lines.append("  ⚠️ Keepa deadline reached — some prices not updated")
+        lines.append("  ⚠️ Ліміт часу Keepa — частина цін не оновлена")
+
+    if errors:
+        lines.append("")
+        lines.append(f"<b>Помилки треків ({len(errors)}):</b>")
+        # Show up to 20 errors to avoid message being too long
+        for tn, reason in errors[:20]:
+            lines.append(f"  • <code>{tn}</code> — {reason}")
+        if len(errors) > 20:
+            lines.append(f"  … та ще {len(errors) - 20} помилок (дивись лог)")
 
     send_telegram_message("\n".join(lines))
 
@@ -100,6 +113,7 @@ def run_night_sync() -> dict:
         "keepa_skipped": 0,
         "keepa_deadline_hit": False,
     }
+    error_list: list[tuple[str, str]] = []  # (tracking_number, reason)
 
     try:
         # ── Phase 1: UPS delivery check ──────────────────────────────────────
@@ -134,7 +148,9 @@ def run_night_sync() -> dict:
                             need_keepa.append(parcel.id)
             except UPSError as exc:
                 stats["ups_errors"] += 1
-                logger.warning("UPS error %s: %s", parcel.tracking_number, exc)
+                reason = str(exc)
+                error_list.append((parcel.tracking_number, reason))
+                logger.warning("UPS error %s: %s", parcel.tracking_number, reason)
 
             time.sleep(_SLEEP_BETWEEN_REQUESTS)
 
@@ -167,11 +183,14 @@ def run_night_sync() -> dict:
         if need_keepa:
             stats["keepa_skipped"] += len(need_keepa)
             stats["keepa_deadline_hit"] = True
-            logger.warning("Night sync deadline reached, %d parcels still need Keepa.", len(need_keepa))
+            logger.warning(
+                "Night sync deadline reached, %d parcels still need Keepa.", len(need_keepa)
+            )
 
     except Exception as exc:
         logger.exception("Night sync failed unexpectedly: %s", exc)
-        stats["ups_errors"] = stats.get("ups_errors", 0) + 1
+        stats["ups_errors"] += 1
+
     finally:
         db.close()
 
@@ -179,7 +198,7 @@ def run_night_sync() -> dict:
     logger.info("Night sync complete: %s", stats)
 
     try:
-        _send_report(stats, started_at, finished_at)
+        _send_report(stats, started_at, finished_at, error_list)
     except Exception as exc:
         logger.warning("Failed to send Telegram report: %s", exc)
 
