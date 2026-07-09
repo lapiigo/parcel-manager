@@ -904,6 +904,108 @@ def parcel_accept(
     return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
 
 
+@router.post("/{parcel_id}/process")
+def parcel_process(
+    request: Request,
+    parcel_id: int,
+    action: str = Form(...),
+    discount: str = Form(""),
+    asin_override: str = Form(""),
+    qty_override: str = Form(""),
+    process_notes: str = Form(""),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    """Handle all 7 acceptance conditions from the admin parcel detail modal."""
+    parcel = db.query(Parcel).filter(Parcel.id == parcel_id).first()
+    if not parcel or parcel.status != "delivered":
+        return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+    notes_text = process_notes.strip() or None
+    actor = current_user.full_name or current_user.username
+
+    def _apply_discount(pct_str: str) -> None:
+        try:
+            pct = float(pct_str.strip())
+        except (ValueError, AttributeError):
+            pct = 0.0
+        if pct > 0 and parcel.purchase_price:
+            parcel.purchase_price = round(parcel.purchase_price * (1 - pct / 100), 2)
+
+    def _apply_overrides() -> None:
+        if asin_override.strip():
+            parcel.asin = asin_override.strip().upper()
+            parcel.title = None
+        if qty_override.strip():
+            try:
+                parcel.qty = int(qty_override.strip())
+            except ValueError:
+                pass
+
+    def _fetch_keepa_cost() -> None:
+        if parcel.asin and parcel.arrived_at:
+            try:
+                client = db.query(Client).filter(Client.id == parcel.client_id).first()
+                coeff = (client.cost_coefficient if client and client.cost_coefficient else 0.45)
+                result = keepa_service.get_product_info(parcel.asin, parcel.arrived_at, multiplier=coeff)
+                if result.title and not parcel.title:
+                    parcel.title = result.title
+                if result.cost is not None:
+                    parcel.amazon_price = result.amazon_price
+                    parcel.purchase_price = result.cost
+            except keepa_service.KeepaError:
+                pass
+
+    if action == "accepted":
+        _fetch_keepa_cost()
+        transition_parcel(parcel, "ready_to_pay", db, changed_by=actor)
+        _log(db, parcel_id, "accepted", "Condition: ok" + (f" | {notes_text}" if notes_text else ""), user=current_user)
+
+    elif action == "overstock":
+        _fetch_keepa_cost()
+        _apply_discount(discount)
+        transition_parcel(parcel, "ready_to_pay", db, changed_by=actor)
+        _log(db, parcel_id, "accepted", f"Condition: overstock, discount {discount}%" + (f" | {notes_text}" if notes_text else ""), user=current_user)
+
+    elif action == "damaged":
+        _fetch_keepa_cost()
+        _apply_discount(discount)
+        transition_parcel(parcel, "ready_to_pay", db, changed_by=actor)
+        _log(db, parcel_id, "accepted", f"Condition: damaged, discount {discount}%" + (f" | {notes_text}" if notes_text else ""), user=current_user)
+
+    elif action == "very_damaged":
+        parcel.purchase_price = 0
+        parcel.amazon_price = None
+        transition_parcel(parcel, "return_to_supplier", db, changed_by=actor, notes="very damaged")
+        _log(db, parcel_id, "accepted", "Condition: very damaged → return" + (f" | {notes_text}" if notes_text else ""), user=current_user)
+
+    elif action == "wrong_item_accept":
+        _apply_overrides()
+        _fetch_keepa_cost()
+        transition_parcel(parcel, "ready_to_pay", db, changed_by=actor)
+        _log(db, parcel_id, "accepted", "Condition: wrong item (accept)" + (f" | {notes_text}" if notes_text else ""), user=current_user)
+
+    elif action == "wrong_item_discount":
+        _apply_overrides()
+        _fetch_keepa_cost()
+        _apply_discount(discount)
+        transition_parcel(parcel, "ready_to_pay", db, changed_by=actor)
+        _log(db, parcel_id, "accepted", f"Condition: wrong item w/ discount {discount}%" + (f" | {notes_text}" if notes_text else ""), user=current_user)
+
+    elif action == "wrong_item_return":
+        _apply_overrides()
+        parcel.purchase_price = 0
+        parcel.amazon_price = None
+        transition_parcel(parcel, "return_to_supplier", db, changed_by=actor, notes="wrong item")
+        _log(db, parcel_id, "accepted", "Condition: wrong item → return" + (f" | {notes_text}" if notes_text else ""), user=current_user)
+
+    if notes_text:
+        parcel.notes = (parcel.notes + "\n" + notes_text).strip() if parcel.notes else notes_text
+
+    db.commit()
+    return RedirectResponse(f"/parcels/{parcel_id}", status_code=302)
+
+
 def _bg_register_prep(
     parcel_id: int,
     tracking_number: str,

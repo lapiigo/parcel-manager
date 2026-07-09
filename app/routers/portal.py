@@ -65,24 +65,33 @@ def portal_dashboard(
 
     base = db.query(Parcel).filter(Parcel.client_id == client.id)
 
-    # Counts for dashboard stats
-    in_transit_count = base.filter(Parcel.status == "in_transit").count()
-    delivered_count  = base.filter(Parcel.status == "delivered").count()
-    negotiating_count = base.filter(Parcel.status == "negotiating").count()
+    # Fetch parcels per status to get both counts and cost sums
+    in_transit_parcels  = base.filter(Parcel.status == "in_transit").all()
+    delivered_parcels   = base.filter(Parcel.status == "delivered").all()
+    ready_parcels       = base.filter(Parcel.status == "ready_to_pay").all()
+    negotiating_parcels = base.filter(Parcel.status == "negotiating").all()
+
+    in_transit_count    = len(in_transit_parcels)
+    delivered_count     = len(delivered_parcels)
+    ready_to_pay_count  = len(ready_parcels)
+    negotiating_count   = len(negotiating_parcels)
+
+    in_transit_value    = sum(p.purchase_price or 0 for p in in_transit_parcels)
+    delivered_value     = sum(p.purchase_price or 0 for p in delivered_parcels)
+    ready_to_pay_value  = sum(p.purchase_price or 0 for p in ready_parcels)
 
     # Parcels needing client attention: delivered or negotiating where last round was from admin
-    needs_action = base.filter(Parcel.status == "delivered").order_by(Parcel.arrived_at.asc()).all()
-    # Also add negotiating parcels where latest negotiation round is from admin (ball in client's court)
-    neg_parcels = base.filter(Parcel.status == "negotiating").all()
-    for p in neg_parcels:
+    needs_action = list(delivered_parcels)
+    for p in negotiating_parcels:
         if p.negotiations and p.negotiations[-1].actor == "admin":
             needs_action.append(p)
 
     # Recent reports
     reports = db.query(Report).filter(Report.client_id == client.id).order_by(Report.created_at.desc()).limit(5).all()
 
-    # Balance = confirmed deposits - total paid (sum of report totals)
-    confirmed_deposits = _confirmed_deposits_total(client)
+    balance = client.balance or 0
+    # Projected balance = actual balance minus estimated cost of all active parcels
+    balance_projected = balance - in_transit_value - delivered_value - ready_to_pay_value
 
     return templates.TemplateResponse(
         request,
@@ -91,11 +100,16 @@ def portal_dashboard(
             "current_user": current_user,
             "client": client,
             "in_transit_count": in_transit_count,
+            "in_transit_value": in_transit_value,
             "delivered_count": delivered_count,
+            "delivered_value": delivered_value,
+            "ready_to_pay_count": ready_to_pay_count,
+            "ready_to_pay_value": ready_to_pay_value,
             "negotiating_count": negotiating_count,
             "needs_action": needs_action,
             "reports": reports,
-            "confirmed_deposits": confirmed_deposits,
+            "balance": balance,
+            "balance_projected": balance_projected,
             "STATUS_LABELS": STATUS_LABELS,
             "STATUS_COLORS": STATUS_COLORS,
             "CLIENT_ACTION_LABELS": CLIENT_ACTION_LABELS,

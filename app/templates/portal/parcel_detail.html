@@ -18,12 +18,6 @@
         <dt class="text-gray-400">Tracking</dt>
         <dd class="font-mono text-xs font-semibold text-gray-800 break-all">{{ parcel.tracking_number }}</dd>
       </div>
-      {% if parcel.external_order_id %}
-      <div>
-        <dt class="text-gray-400">Order ID</dt>
-        <dd class="font-mono text-xs text-gray-700">{{ parcel.external_order_id }}</dd>
-      </div>
-      {% endif %}
       {% if parcel.asin %}
       <div>
         <dt class="text-gray-400">ASIN</dt>
