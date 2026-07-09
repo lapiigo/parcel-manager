@@ -200,7 +200,7 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
                     parcel.estimated_delivery_at = None
                     parcel.status = "delivered"
 
-                    if parcel.asin and parcel.purchase_price is None:
+                    if parcel.asin:
                         try:
                             from app.services import keepa_service
                             coeff = _client_coeff(parcel.client_id, db)

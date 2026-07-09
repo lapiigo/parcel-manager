@@ -980,9 +980,8 @@ def parcel_process(
 
     elif action == "very_damaged":
         parcel.purchase_price = 0
-        parcel.amazon_price = None
-        transition_parcel(parcel, "return_to_supplier", db, changed_by=actor, notes="very damaged")
-        _log(db, parcel_id, "accepted", "Condition: very damaged → return" + (f" | {notes_text}" if notes_text else ""), user=current_user)
+        transition_parcel(parcel, "ready_to_pay", db, changed_by=actor, notes="very damaged — $0")
+        _log(db, parcel_id, "accepted", "Condition: very damaged → $0 → ready to pay" + (f" | {notes_text}" if notes_text else ""), user=current_user)
 
     elif action == "wrong_item_accept":
         _apply_overrides()
@@ -1000,9 +999,8 @@ def parcel_process(
     elif action == "wrong_item_return":
         _apply_overrides()
         parcel.purchase_price = 0
-        parcel.amazon_price = None
-        transition_parcel(parcel, "return_to_supplier", db, changed_by=actor, notes="wrong item")
-        _log(db, parcel_id, "accepted", "Condition: wrong item → return" + (f" | {notes_text}" if notes_text else ""), user=current_user)
+        transition_parcel(parcel, "ready_to_pay", db, changed_by=actor, notes="wrong item — $0")
+        _log(db, parcel_id, "accepted", "Condition: wrong item → $0 → ready to pay" + (f" | {notes_text}" if notes_text else ""), user=current_user)
 
     if notes_text:
         parcel.notes = (parcel.notes + "\n" + notes_text).strip() if parcel.notes else notes_text
@@ -1229,6 +1227,12 @@ def parcel_admin_respond(
     actor_name = current_user.full_name or current_user.username
 
     if action == "approved":
+        # discount_val = % of amazon_price (buybox at delivery), not % off
+        if discount_val is not None and parcel.amazon_price:
+            parcel.purchase_price = round(parcel.amazon_price * discount_val / 100, 2)
+        elif discount_val is None and parcel.amazon_price and not parcel.purchase_price:
+            # No discount specified but no price yet — keep existing or leave as-is
+            pass
         db.add(ParcelNegotiation(
             parcel_id=parcel_id, round_number=round_num, actor="admin",
             action="approved", discount_proposed=discount_val,
@@ -1237,27 +1241,31 @@ def parcel_admin_respond(
         transition_parcel(parcel, "ready_to_pay", db, changed_by=actor_name,
                           notes="Admin approved negotiation")
         _log(db, parcel_id, "admin_approved_negotiation",
-             f"Approved" + (f" with discount: {discount_val}%" if discount_val else ""),
+             f"Approved" + (f" at {discount_val}% of buybox = ${parcel.purchase_price}" if discount_val else ""),
              user=current_user)
 
     elif action == "approve_return":
+        # Return: goes to ready_to_pay at $0 so it appears in the payment report
+        parcel.purchase_price = 0
+        parcel.amazon_price = parcel.amazon_price  # keep for reference
         db.add(ParcelNegotiation(
             parcel_id=parcel_id, round_number=round_num, actor="admin",
             action="approve_return", discount_proposed=None,
             notes=notes.strip() or None,
         ))
-        transition_parcel(parcel, "return_to_supplier", db, changed_by=actor_name,
-                          notes="Admin approved client return request")
-        _log(db, parcel_id, "admin_approved_return", None, user=current_user)
+        transition_parcel(parcel, "ready_to_pay", db, changed_by=actor_name,
+                          notes="Return approved — $0 for report")
+        _log(db, parcel_id, "admin_approved_return", "Return at $0 → ready to pay", user=current_user)
 
     else:  # counter_offer
+        # discount_val here is the % of amazon_price the admin offers
         db.add(ParcelNegotiation(
             parcel_id=parcel_id, round_number=round_num, actor="admin",
             action="counter_offer", discount_proposed=discount_val,
             notes=notes.strip() or None,
         ))
         _log(db, parcel_id, "admin_counter_offer",
-             f"Round {round_num}" + (f", discount: {discount_val}%" if discount_val else ""),
+             f"Round {round_num}" + (f", {discount_val}% of buybox" if discount_val else ""),
              user=current_user)
         db.commit()
 

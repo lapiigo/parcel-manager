@@ -387,7 +387,7 @@
             <span class="text-xs text-gray-400">R{{ r.round_number }}</span>
           </div>
           <p class="text-xs font-medium text-gray-800">{% if r.action == 'approved' %}✅ Approved{% elif r.action == 'counter_offer' %}↩️ Counter Offer{% elif r.action == 'approve_return' %}📦 Return Approved{% elif r.action == 'accepted' %}✅ Client Accepted{% else %}{{ r.action }}{% endif %}</p>
-          {% if r.discount_proposed is not none %}<p class="text-xs text-gray-600">Discount: {{ r.discount_proposed }}%</p>{% endif %}
+          {% if r.discount_proposed is not none %}<p class="text-xs text-gray-600">Rate: {{ r.discount_proposed }}% of buy box{% if parcel.amazon_price %} = ${{ "%.2f"|format(parcel.amazon_price * r.discount_proposed / 100) }}{% endif %}</p>{% endif %}
           {% if r.notes %}<p class="text-xs text-gray-500 mt-0.5">{{ r.notes }}</p>{% endif %}
         </div>
       </div>
@@ -407,8 +407,13 @@
       <input type="hidden" name="action" :value="action" />
       <div x-show="action !== ''">
         <div x-show="action !== 'approve_return'" class="mb-3">
-          <label class="block text-xs font-medium text-gray-600 mb-1">Discount (%)</label>
-          <input type="number" name="discount" min="0" max="100" step="0.5" class="w-32 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+          <label class="block text-xs font-medium text-gray-600 mb-1">Client rate (% of buy box)</label>
+          <div class="flex items-center gap-2 flex-wrap">
+            <input type="number" name="discount" min="0" max="100" step="0.5" placeholder="e.g. 50"
+                   class="w-28 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+            {% if parcel.amazon_price %}<span class="text-xs text-gray-400">Buy box at delivery: ${{ "%.2f"|format(parcel.amazon_price) }}</span>{% endif %}
+          </div>
+          <p class="text-xs text-gray-400 mt-0.5">Cost = buy box × %  (e.g. 50% of ${{ "%.2f"|format(parcel.amazon_price) if parcel.amazon_price else "?" }} = ${{ "%.2f"|format(parcel.amazon_price * 0.5) if parcel.amazon_price else "?" }})</p>
         </div>
         <div>
           <label class="block text-xs font-medium text-gray-600 mb-1">Notes</label>

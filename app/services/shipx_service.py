@@ -584,7 +584,7 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
                 parcel.status = "delivered"
 
                 # Auto-calculate cost from Keepa using client's coefficient
-                if parcel.asin and parcel.purchase_price is None:
+                if parcel.asin:
                     try:
                         from app.services import keepa_service
                         coeff = _client_coeff(parcel.client_id, db)

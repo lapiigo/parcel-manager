@@ -258,17 +258,27 @@ async def portal_process_parcel(
     actor_name = current_user.full_name or current_user.username
     round_num = 1
 
-    if action in ("accepted",):
-        # Direct acceptance — move to ready_to_pay
+    if action == "accepted":
+        # Direct acceptance — move to ready_to_pay, calculate actual cost from Keepa
+        if parcel.asin and parcel.arrived_at:
+            try:
+                from app.services import keepa_service
+                from app.models.client import Client as _Client
+                _cli = db.query(_Client).filter(_Client.id == parcel.client_id).first()
+                _coeff = (_cli.cost_coefficient if _cli and _cli.cost_coefficient else 0.45)
+                result = keepa_service.get_product_info(parcel.asin, parcel.arrived_at, multiplier=_coeff)
+                if result.amazon_price is not None:
+                    parcel.amazon_price = result.amazon_price
+                if result.cost is not None:
+                    parcel.purchase_price = float(result.cost)
+                if result.title and not parcel.title:
+                    parcel.title = result.title
+            except Exception:
+                pass
         transition_parcel(parcel, "ready_to_pay", db, changed_by=actor_name, notes="Client accepted")
         _log(db, parcel_id, "client_accepted", "Client confirmed parcel is OK", user=current_user)
-    elif action in ("wrong_item_return", "very_damaged"):
-        # Client refuses → return to supplier
-        transition_parcel(parcel, "return_to_supplier", db, changed_by=actor_name,
-                          notes=f"Client action: {action}. {notes[:200] if notes else ''}")
-        _log(db, parcel_id, "client_return_request", f"Client requested return: {action}", user=current_user)
     else:
-        # Counter-offer — move to negotiating
+        # All other actions go to negotiating for admin review
         db.add(ParcelNegotiation(
             parcel_id=parcel_id,
             round_number=round_num,
@@ -278,9 +288,9 @@ async def portal_process_parcel(
             notes=notes.strip() or None,
         ))
         transition_parcel(parcel, "negotiating", db, changed_by=actor_name,
-                          notes=f"Client counter-offer: {action}")
+                          notes=f"Client: {action}")
         _log(db, parcel_id, "client_counter_offer",
-             f"Action: {action}" + (f", discount: {discount_val}%" if discount_val else ""),
+             f"Action: {action}" + (f", %: {discount_val}" if discount_val else ""),
              user=current_user)
 
     db.commit()
