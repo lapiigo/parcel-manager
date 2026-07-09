@@ -489,6 +489,85 @@ async def portal_add_deposit(
     return RedirectResponse("/portal/deposits", status_code=302)
 
 
+# ── Parcel photos (client) ───────────────────────────────────────────────────
+
+@router.post("/parcels/{parcel_id}/photo")
+async def portal_parcel_photo_upload(
+    request: Request,
+    parcel_id: int,
+    files: list[UploadFile] = File(default=[]),
+    caption: str = Form(""),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_client),
+):
+    client = _get_client(current_user, db)
+    if not client:
+        return RedirectResponse("/portal", status_code=302)
+    parcel = db.query(Parcel).filter(Parcel.id == parcel_id, Parcel.client_id == client.id).first()
+    if not parcel:
+        return RedirectResponse("/portal/parcels", status_code=302)
+    from app.models.parcel import ParcelPhoto
+    for f in files:
+        if f and f.filename:
+            ext = os.path.splitext(f.filename)[1].lower()
+            filename = f"{uuid.uuid4().hex}{ext}"
+            dest = os.path.join(UPLOAD_DIR, "parcels", filename)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(dest, "wb") as fp:
+                fp.write(await f.read())
+            db.add(ParcelPhoto(parcel_id=parcel_id, file_path=f"/uploads/parcels/{filename}", caption=caption.strip() or None))
+    db.commit()
+    return RedirectResponse(f"/portal/parcels/{parcel_id}", status_code=302)
+
+
+@router.post("/parcels/{parcel_id}/photo/{photo_id}/delete")
+def portal_parcel_photo_delete(
+    request: Request,
+    parcel_id: int,
+    photo_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_client),
+):
+    client = _get_client(current_user, db)
+    if not client:
+        return RedirectResponse("/portal", status_code=302)
+    parcel = db.query(Parcel).filter(Parcel.id == parcel_id, Parcel.client_id == client.id).first()
+    if not parcel:
+        return RedirectResponse("/portal/parcels", status_code=302)
+    from app.models.parcel import ParcelPhoto
+    photo = db.query(ParcelPhoto).filter(ParcelPhoto.id == photo_id, ParcelPhoto.parcel_id == parcel_id).first()
+    if photo:
+        db.delete(photo)
+        db.commit()
+    return RedirectResponse(f"/portal/parcels/{parcel_id}", status_code=302)
+
+
+# ── Parcel comments (client) ──────────────────────────────────────────────────
+
+@router.post("/parcels/{parcel_id}/comment")
+def portal_parcel_comment(
+    request: Request,
+    parcel_id: int,
+    body: str = Form(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_client),
+):
+    client = _get_client(current_user, db)
+    if not client:
+        return RedirectResponse("/portal", status_code=302)
+    parcel = db.query(Parcel).filter(Parcel.id == parcel_id, Parcel.client_id == client.id).first()
+    if not parcel:
+        return RedirectResponse("/portal/parcels", status_code=302)
+    from app.models.parcel import ParcelComment
+    db.add(ParcelComment(
+        parcel_id=parcel_id,
+        body=body.strip(),
+        author=current_user.full_name or current_user.username,
+    ))
+    db.commit()
+    return RedirectResponse(f"/portal/parcels/{parcel_id}#comments", status_code=302)
+
+
 # ── Reports ──────────────────────────────────────────────────────────────────
 
 @router.get("/reports", response_class=HTMLResponse)

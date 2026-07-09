@@ -52,8 +52,10 @@
        pct: {{ client_pct }},
        defaultPct: {{ client_pct }},
        amazonPrice: {{ amazon_price }},
+       priceOverride: '',
        get calcCost() { return this.amazonPrice ? (this.amazonPrice * this.pct / 100).toFixed(2) : null; },
-       openModal(id) { this.parcelId = id; this.modalOpen = true; this.action = ''; this.pct = this.defaultPct; },
+       get finalCost() { return this.priceOverride ? parseFloat(this.priceOverride).toFixed(2) : this.calcCost; },
+       openModal(id) { this.parcelId = id; this.modalOpen = true; this.action = ''; this.pct = this.defaultPct; this.priceOverride = ''; },
        closeModal() { this.modalOpen = false; this.action = ''; this.pct = this.defaultPct; }
      }">
 
@@ -97,6 +99,23 @@
           {% if parcel.status == 'return_to_supplier' %}
             {% if parcel.is_returned %}<span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Returned</span>
             {% else %}<span class="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">Pending return</span>{% endif %}
+          {% endif %}
+          {% if current_user.role in ('super_admin', 'admin') and parcel.status in ('unidentified', 'in_transit') %}
+          <form method="post" action="/parcels/{{ parcel.id }}/status" class="inline"
+                onsubmit="return confirm('Mark parcel as Ignored?')">
+            <input type="hidden" name="new_status" value="ignored" />
+            <button type="submit" class="inline-flex items-center gap-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-500 hover:text-gray-700 px-2 py-0.5 rounded-full font-medium transition-colors">
+              Ignore
+            </button>
+          </form>
+          {% endif %}
+          {% if current_user.role in ('super_admin', 'admin') and parcel.status == 'ignored' %}
+          <form method="post" action="/parcels/{{ parcel.id }}/status" class="inline">
+            <input type="hidden" name="new_status" value="in_transit" />
+            <button type="submit" class="inline-flex items-center gap-1 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-600 px-2 py-0.5 rounded-full font-medium transition-colors">
+              Unignore
+            </button>
+          </form>
           {% endif %}
         </dd>
       </div>
@@ -298,26 +317,43 @@
 
           <!-- Rate field — shown for all accept cases (not for $0 returns) -->
           <div x-show="!['very_damaged','wrong_item_return',''].includes(action)" x-cloak
-               class="bg-gray-50 rounded-xl p-4 border border-gray-200">
-            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate (% of buy box)</label>
-            <div class="flex items-center gap-3 flex-wrap">
-              <input type="number" name="discount" :value="pct" x-model="pct"
-                     min="1" max="100" step="0.5"
-                     class="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm font-semibold text-center focus:outline-none focus:ring-2 focus:ring-indigo-400" />
-              <span class="text-sm text-gray-500">% of buy box</span>
+               class="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-3">
+            <div>
+              <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate (% of buy box)</label>
+              <div class="flex items-center gap-3 flex-wrap">
+                <input type="number" name="discount" :value="pct" x-model="pct"
+                       min="1" max="100" step="0.5"
+                       class="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm font-semibold text-center focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                <span class="text-sm text-gray-500">% of buy box</span>
+                {% if parcel.amazon_price %}
+                <span class="text-xs text-gray-400 bg-white border border-gray-200 px-2 py-1 rounded">
+                  Buy box: <strong>${{ "%.2f"|format(parcel.amazon_price) }}</strong>
+                </span>
+                {% endif %}
+              </div>
               {% if parcel.amazon_price %}
-              <span class="text-xs text-gray-400 bg-white border border-gray-200 px-2 py-1 rounded">
-                Buy box: <strong>${{ "%.2f"|format(parcel.amazon_price) }}</strong>
-              </span>
+              <p class="text-xs text-indigo-600 mt-1.5 font-medium" x-show="!priceOverride">
+                Cost = $<span x-text="calcCost || '?'"></span>
+              </p>
+              {% else %}
+              <p class="text-xs text-gray-400 mt-1.5" x-show="!priceOverride">Buy box will be fetched from Keepa at save.</p>
               {% endif %}
             </div>
-            {% if parcel.amazon_price %}
-            <p class="text-xs text-indigo-600 mt-2 font-medium">
-              Cost = $<span x-text="calcCost || '?'"></span>
-            </p>
-            {% else %}
-            <p class="text-xs text-gray-400 mt-2">Buy box price will be fetched from Keepa at save.</p>
-            {% endif %}
+            <div class="border-t border-gray-200 pt-3">
+              <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+                Or enter price manually <span class="normal-case font-normal text-gray-400">(overrides % above — use when item is no longer on sale)</span>
+              </label>
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-gray-500">$</span>
+                <input type="number" name="price_override" x-model="priceOverride" min="0" step="0.01" placeholder="0.00"
+                       class="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm font-semibold text-center focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                <span class="text-xs text-gray-400" x-show="priceOverride">← will use this price</span>
+                <span class="text-xs text-gray-400" x-show="!priceOverride">leave blank to use % above</span>
+              </div>
+              <p class="text-xs text-indigo-600 mt-1.5 font-medium" x-show="priceOverride && parseFloat(priceOverride) > 0">
+                Cost = $<span x-text="finalCost"></span> (manual)
+              </p>
+            </div>
           </div>
 
           <!-- $0 notice for return cases -->
@@ -439,6 +475,7 @@
           x-data="{
             action: '',
             pct: {{ suggest_pct }},
+            negPriceOverride: '',
             amazonPrice: {{ amazon_price }},
             get calcCost() { return this.amazonPrice ? (this.amazonPrice * this.pct / 100).toFixed(2) : null; }
           }"
@@ -451,23 +488,39 @@
       <input type="hidden" name="action" :value="action" />
       <div x-show="action !== ''" class="space-y-3">
         <!-- Rate field for approve / counter_offer -->
-        <div x-show="action !== 'approve_return'" class="bg-gray-50 rounded-xl p-4 border border-gray-200">
-          <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate (% of buy box)</label>
-          <div class="flex items-center gap-3 flex-wrap">
-            <input type="number" name="discount" :value="pct" x-model="pct"
-                   min="1" max="100" step="0.5"
-                   class="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm font-semibold text-center focus:outline-none focus:ring-2 focus:ring-indigo-400" />
-            <span class="text-sm text-gray-500">%</span>
-            {% if parcel.amazon_price %}<span class="text-xs text-gray-400">Buy box: <strong>${{ "%.2f"|format(parcel.amazon_price) }}</strong></span>{% endif %}
+        <div x-show="action !== 'approve_return'" class="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate (% of buy box)</label>
+            <div class="flex items-center gap-3 flex-wrap">
+              <input type="number" name="discount" :value="pct" x-model="pct"
+                     min="1" max="100" step="0.5"
+                     class="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm font-semibold text-center focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+              <span class="text-sm text-gray-500">%</span>
+              {% if parcel.amazon_price %}<span class="text-xs text-gray-400">Buy box: <strong>${{ "%.2f"|format(parcel.amazon_price) }}</strong></span>{% endif %}
+            </div>
+            {% if parcel.amazon_price %}
+            <p class="text-xs text-indigo-600 mt-1.5 font-medium" x-show="!negPriceOverride">Cost = $<span x-text="calcCost || '?'"></span></p>
+            {% else %}
+            <p class="text-xs text-gray-400 mt-1.5" x-show="!negPriceOverride">Buy box will be fetched from Keepa.</p>
+            {% endif %}
+            {% if ns.last_client_pct %}
+            <p class="text-xs text-amber-600 mt-1">Client proposed: <strong>{{ ns.last_client_pct }}%</strong>{% if parcel.amazon_price %} = ${{ "%.2f"|format(parcel.amazon_price * ns.last_client_pct / 100) }}{% endif %}</p>
+            {% endif %}
           </div>
-          {% if parcel.amazon_price %}
-          <p class="text-xs text-indigo-600 mt-2 font-medium">Cost = $<span x-text="calcCost || '?'"></span></p>
-          {% else %}
-          <p class="text-xs text-gray-400 mt-2">Buy box will be fetched from Keepa.</p>
-          {% endif %}
-          {% if ns.last_client_pct %}
-          <p class="text-xs text-amber-600 mt-1">Client proposed: <strong>{{ ns.last_client_pct }}%</strong>{% if parcel.amazon_price %} = ${{ "%.2f"|format(parcel.amazon_price * ns.last_client_pct / 100) }}{% endif %}</p>
-          {% endif %}
+          <div class="border-t border-gray-200 pt-3">
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+              Or enter price manually <span class="normal-case font-normal text-gray-400">(overrides %)</span>
+            </label>
+            <div class="flex items-center gap-2">
+              <span class="text-sm text-gray-500">$</span>
+              <input type="number" name="price_override" x-model="negPriceOverride" min="0" step="0.01" placeholder="0.00"
+                     class="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm font-semibold text-center focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+              <span class="text-xs text-gray-400" x-show="!negPriceOverride">leave blank to use %</span>
+            </div>
+            <p class="text-xs text-indigo-600 mt-1.5 font-medium" x-show="negPriceOverride && parseFloat(negPriceOverride) > 0">
+              Cost = $<span x-text="parseFloat(negPriceOverride).toFixed(2)"></span> (manual)
+            </p>
+          </div>
         </div>
         <!-- $0 notice for return -->
         <div x-show="action === 'approve_return'" class="bg-red-50 border border-red-200 rounded-xl p-3">

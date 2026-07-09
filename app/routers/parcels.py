@@ -344,6 +344,27 @@ def sync_transit(
     )
 
 
+@router.post("/night-sync")
+async def night_sync(
+    background_tasks: BackgroundTasks,
+    request: Request,
+):
+    """
+    Trigger nightly UPS sync + Keepa price update.
+    Protected by X-Night-Sync-Key header (set NIGHT_SYNC_KEY in .env).
+    Called by systemd timer at 02:00 UTC.
+    """
+    from fastapi import HTTPException
+    expected = os.getenv("NIGHT_SYNC_KEY", "")
+    provided = request.headers.get("X-Night-Sync-Key", "")
+    if not expected or provided != expected:
+        raise HTTPException(status_code=403, detail="Invalid or missing X-Night-Sync-Key")
+
+    from app.services.night_sync_service import run_night_sync
+    background_tasks.add_task(run_night_sync)
+    return {"status": "started", "message": "Night sync running in background"}
+
+
 @router.post("/bulk")
 def parcel_bulk(
     request: Request,
@@ -1024,6 +1045,7 @@ def parcel_process(
     parcel_id: int,
     action: str = Form(...),
     discount: str = Form(""),
+    price_override: str = Form(""),
     asin_override: str = Form(""),
     qty_override: str = Form(""),
     process_notes: str = Form(""),
@@ -1066,13 +1088,21 @@ def parcel_process(
             except keepa_service.KeepaError:
                 pass
 
+    # Manual price override takes priority over % calculation
+    try:
+        manual_price = float(price_override.strip()) if price_override.strip() else None
+    except ValueError:
+        manual_price = None
+
     def _apply_pct() -> None:
-        """Set purchase_price = amazon_price × pct/100."""
+        """Set purchase_price from manual override or amazon_price × pct/100."""
+        if manual_price is not None:
+            parcel.purchase_price = round(manual_price, 2)
+            return
         _ensure_amazon_price()
         if pct is not None and parcel.amazon_price:
             parcel.purchase_price = round(parcel.amazon_price * pct / 100, 2)
         elif pct is not None:
-            # amazon_price unavailable — store pct for reference, price stays as-is
             pass
 
     if action == "accepted":
@@ -1326,6 +1356,7 @@ def parcel_admin_respond(
     parcel_id: int,
     action: str = Form(...),   # approved | counter_offer | approve_return
     discount: str = Form(""),
+    price_override: str = Form(""),
     notes: str = Form(""),
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
@@ -1347,13 +1378,17 @@ def parcel_admin_respond(
     round_num = len(parcel.negotiations) + 1
     actor_name = current_user.full_name or current_user.username
 
+    # Manual price override (when item not on sale / no buy box available)
+    try:
+        manual_price = float(price_override.strip()) if price_override.strip() else None
+    except ValueError:
+        manual_price = None
+
     if action == "approved":
-        # discount_val = % of amazon_price (buybox at delivery), not % off
-        if discount_val is not None and parcel.amazon_price:
+        if manual_price is not None:
+            parcel.purchase_price = round(manual_price, 2)
+        elif discount_val is not None and parcel.amazon_price:
             parcel.purchase_price = round(parcel.amazon_price * discount_val / 100, 2)
-        elif discount_val is None and parcel.amazon_price and not parcel.purchase_price:
-            # No discount specified but no price yet — keep existing or leave as-is
-            pass
         db.add(ParcelNegotiation(
             parcel_id=parcel_id, round_number=round_num, actor="admin",
             action="approved", discount_proposed=discount_val,
@@ -1361,8 +1396,9 @@ def parcel_admin_respond(
         ))
         transition_parcel(parcel, "ready_to_pay", db, changed_by=actor_name,
                           notes="Admin approved negotiation")
+        cost_info = f"manual ${parcel.purchase_price}" if manual_price is not None else (f"at {discount_val}% of buybox = ${parcel.purchase_price}" if discount_val else "")
         _log(db, parcel_id, "admin_approved_negotiation",
-             f"Approved" + (f" at {discount_val}% of buybox = ${parcel.purchase_price}" if discount_val else ""),
+             f"Approved" + (f" {cost_info}" if cost_info else ""),
              user=current_user)
 
     elif action == "approve_return":

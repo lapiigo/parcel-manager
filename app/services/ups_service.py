@@ -1,117 +1,147 @@
 """
-UPS delivery date lookup via 17track.net API.
-
-Registration (free, 1 min): https://api.17track.net
-Free tier: 100 trackings/month.
-
-Set SEVENTEENTRACK_API_KEY in .env after registration.
+UPS tracking via direct browser-emulation (no API key required).
 
 Flow:
-1. POST /track/v2/register  — register the tracking number (idempotent)
-2. POST /track/v2/gettrackinfo  — get full event list
-3. Find the first "delivered" event and return its datetime
+1. GET tracking page → picks up session cookies incl. XSRF token
+2. POST to UPS internal API with the XSRF token
+3. Parse packageStatus / deliveredDate from response
+
+Handles UPS tracking numbers starting with 1Z.
 """
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from typing import Optional
 
 import requests
 
-_BASE = "https://api.17track.net/track/v2"
-_CARRIER_UPS = 100046  # 17track carrier code for UPS
+_PAGE_URL = "https://www.ups.com/track"
+_API_URL = "https://www.ups.com/track/api/Track/GetStatus"
+
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+}
 
 
 class UPSError(Exception):
     pass
 
 
-def _headers() -> dict:
-    key = os.getenv("SEVENTEENTRACK_API_KEY", "")
-    if not key:
-        raise UPSError(
-            "17TRACK_API_KEY is not set in .env. "
-            "Register free at https://api.17track.net to get a key."
-        )
-    return {"17token": key, "Content-Type": "application/json"}
+def make_session() -> requests.Session:
+    """Create a new browser-like session. Reuse across multiple tracking calls."""
+    s = requests.Session()
+    s.headers.update(_HEADERS)
+    return s
 
 
-def _is_ups(tracking_number: str) -> bool:
-    """UPS tracking numbers start with 1Z."""
-    return tracking_number.strip().upper().startswith("1Z")
-
-
-def _parse_dt(s: str) -> Optional[datetime]:
-    """Parse 17track datetime string: '2024-10-15T14:30:00' or '2024-10-15 14:30:00'."""
-    if not s:
-        return None
-    s = s.strip().replace("T", " ")
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+def _parse_dt(date_str: str, time_str: str = "") -> Optional[datetime]:
+    combined = f"{date_str} {time_str}".strip()
+    for fmt in (
+        "%m/%d/%Y %I:%M %p",
+        "%m/%d/%Y %H:%M",
+        "%m/%d/%Y",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ):
         try:
-            return datetime.strptime(s, fmt)
+            return datetime.strptime(combined, fmt)
         except ValueError:
             continue
     return None
 
 
-def get_delivery_datetime(tracking_number: str) -> Optional[datetime]:
+def get_tracking_status(
+    tracking_number: str,
+    session: Optional[requests.Session] = None,
+) -> dict:
     """
-    Return the datetime the parcel was delivered, or None if not yet delivered.
-    Raises UPSError on failure.
+    Check UPS delivery status for a single tracking number.
+
+    Returns:
+        {
+            "delivered": bool,
+            "delivered_at": datetime | None,  # naive, UTC-approximate
+            "status": str,                    # raw status from UPS
+        }
+
+    Raises UPSError on network or parse failure.
     """
+    own_session = session is None
+    if own_session:
+        session = make_session()
+
     tn = tracking_number.strip()
-    headers = _headers()
 
-    # Register (idempotent — safe to call multiple times)
-    payload = [{"number": tn}]
-    if _is_ups(tn):
-        payload = [{"number": tn, "carrier": _CARRIER_UPS}]
-
+    # Step 1: load tracking page to acquire cookies / XSRF token
     try:
-        requests.post(f"{_BASE}/register", json=payload, headers=headers, timeout=15)
-    except requests.RequestException:
-        pass  # registration failure is non-fatal; try gettrackinfo anyway
-
-    # Fetch track info
-    try:
-        r = requests.post(
-            f"{_BASE}/gettrackinfo",
-            json=payload,
-            headers=headers,
-            timeout=20,
+        session.get(
+            _PAGE_URL,
+            params={"track": "yes", "trackNums": tn, "requester": "MB/trackdetails"},
+            timeout=15,
+            allow_redirects=True,
         )
     except requests.RequestException as exc:
-        raise UPSError(f"Network error: {exc}") from exc
+        raise UPSError(f"GET page failed: {exc}") from exc
 
-    if r.status_code == 401:
-        raise UPSError("Invalid 17track API key. Check SEVENTEENTRACK_API_KEY in .env.")
-    if r.status_code != 200:
-        raise UPSError(f"17track returned HTTP {r.status_code}: {r.text[:200]}")
+    xsrf = (
+        session.cookies.get("X-XSRF-TOKEN-ST")
+        or session.cookies.get("X-XSRF-TOKEN")
+        or ""
+    )
 
-    data = r.json()
-    if data.get("code") != 0:
-        raise UPSError(f"17track API error: {data.get('data', {})}")
+    # Step 2: call internal tracking API
+    try:
+        resp = session.post(
+            _API_URL,
+            params={"loc": "en_US"},
+            json={"Locale": "en_US", "TrackingNumber": [tn]},
+            headers={
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "Content-Type": "application/json",
+                "X-XSRF-TOKEN": xsrf,
+                "Referer": f"{_PAGE_URL}?track=yes&trackNums={tn}",
+                "X-Requested-With": "XMLHttpRequest",
+                "Origin": "https://www.ups.com",
+            },
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise UPSError(f"POST API failed: {exc}") from exc
 
-    accepted = (data.get("data") or {}).get("accepted") or []
-    if not accepted:
-        errors = (data.get("data") or {}).get("rejected") or []
-        msg = errors[0].get("error", {}).get("message", "unknown") if errors else "no data returned"
-        raise UPSError(f"17track rejected tracking {tn}: {msg}")
+    if resp.status_code != 200:
+        raise UPSError(f"UPS API HTTP {resp.status_code} for {tn}")
 
-    track_info = accepted[0].get("track") or {}
-    events: list[dict] = track_info.get("z1") or []  # z1 = latest events
+    try:
+        data = resp.json()
+    except Exception as exc:
+        raise UPSError(f"Non-JSON UPS response for {tn}: {exc}") from exc
 
-    for event in events:
-        status_code = str(event.get("z") or event.get("status") or "")
-        description = (event.get("z1") or event.get("d") or "").lower()
+    details = data.get("trackDetails") or []
+    if not details:
+        raise UPSError(f"No trackDetails in UPS response for {tn}")
 
-        # 40 = Delivered in 17track status codes; also check description
-        if status_code == "40" or "deliver" in description:
-            dt_str = event.get("a") or event.get("date") or ""
-            dt = _parse_dt(dt_str)
-            if dt:
-                return dt
+    detail = details[0]
+    status_str = (detail.get("packageStatus") or "").strip()
+    is_delivered = "delivered" in status_str.lower()
 
-    return None  # Not yet delivered
+    delivered_at: Optional[datetime] = None
+    if is_delivered:
+        delivered_at = _parse_dt(
+            detail.get("deliveredDate", ""),
+            detail.get("deliveredTime", ""),
+        )
+
+    return {
+        "delivered": is_delivered,
+        "delivered_at": delivered_at,
+        "status": status_str,
+    }

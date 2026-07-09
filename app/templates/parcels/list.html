@@ -56,13 +56,15 @@
 <!-- Status filter pills -->
 <div class="flex items-center gap-2 flex-wrap">
   {% set pills = [
-    ('',             'All Active',    active_total),
-    ('unidentified', 'Unidentified',  counts.get('unidentified',0)),
-    ('in_transit',   'In Transit',    counts.get('in_transit',0)),
-    ('delivered',    'Delivered',     counts.get('delivered',0)),
-    ('negotiating',  'Negotiating',   counts.get('negotiating',0)),
-    ('ready_to_pay', 'Ready to Pay',  counts.get('ready_to_pay',0)),
-    ('archive',      'Archive',       archive_total),
+    ('',                   'All Active',          active_total),
+    ('unidentified',       'Unidentified',        counts.get('unidentified',0)),
+    ('in_transit',         'In Transit',          counts.get('in_transit',0)),
+    ('delivered',          'Delivered',           counts.get('delivered',0)),
+    ('negotiating',        'Negotiating',         counts.get('negotiating',0)),
+    ('ready_to_pay',       'Ready to Pay',        counts.get('ready_to_pay',0)),
+    ('forwarding',         'Forwarding',          counts.get('forwarding',0)),
+    ('return_to_supplier', 'Return to Supplier',  counts.get('return_to_supplier',0)),
+    ('archive',            'Archive',             archive_total),
   ] %}
   {% for val, label, cnt in pills %}
   <a href="/parcels{% if val %}?status={{ val }}{% endif %}"
@@ -365,7 +367,7 @@
     </button>
     <div x-show="open" x-cloak @click.outside="open = false"
          class="absolute bottom-full mb-2 left-0 bg-white rounded-xl shadow-xl border border-gray-100 py-1 min-w-max">
-      {% for s, label in [('unidentified','Unidentified'),('in_transit','In Transit'),('delivered','Delivered'),('ready_to_pay','Ready to Pay'),('paid','Paid'),('forwarding','Forwarding'),('return_to_supplier','Return to Supplier'),('sold','Sold'),('ignored','Ignored')] %}
+      {% for s, label in [('unidentified','Unidentified'),('in_transit','In Transit'),('delivered','Delivered'),('ready_to_pay','Ready to Pay'),('paid','Paid'),('forwarding','Forwarding'),('return_to_supplier','Return to Supplier'),('ignored','Ignored')] %}
       <button @click="bulkAction('set_status', '{{ s }}'); open = false"
               class="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">{{ label }}</button>
       {% endfor %}

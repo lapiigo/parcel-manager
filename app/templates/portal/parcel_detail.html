@@ -50,57 +50,58 @@
   <!-- ── Block 2: Tracks table ─────────────────────────────────────────────── -->
   {% if all_tracks | length > 0 %}
   <div class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-    <div class="px-5 py-4 border-b border-gray-100">
-      <h3 class="text-sm font-semibold text-gray-700">Tracks in this Order</h3>
-      {% if all_tracks | length > 1 %}
-      <p class="text-xs text-gray-400 mt-0.5">{{ all_tracks | length }} tracks — each is processed individually</p>
-      {% endif %}
+    <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+      <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wide">Tracks ({{ all_tracks|length }})</h3>
     </div>
     <div class="overflow-x-auto">
       <table class="w-full text-sm">
-        <thead class="bg-gray-50 text-xs uppercase text-gray-500 font-semibold tracking-wide">
+        <thead class="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
           <tr>
-            <th class="px-4 py-3 text-left">#</th>
-            <th class="px-4 py-3 text-left">Tracking</th>
-            <th class="px-4 py-3 text-left hidden sm:table-cell">ASIN</th>
-            <th class="px-4 py-3 text-left hidden sm:table-cell">Qty</th>
-            <th class="px-4 py-3 text-left">Status</th>
-            <th class="px-4 py-3 text-left hidden md:table-cell">Arrived</th>
-            <th class="px-4 py-3 text-left hidden md:table-cell">Buy Box</th>
-            <th class="px-4 py-3 text-left hidden md:table-cell">Cost</th>
-            <th class="px-4 py-3"></th>
+            <th class="px-4 py-3 text-left font-medium">Tracking</th>
+            <th class="px-4 py-3 text-left font-medium">ASIN</th>
+            <th class="px-4 py-3 text-right font-medium">Cost</th>
+            <th class="px-4 py-3 text-right font-medium">Qty</th>
+            <th class="px-4 py-3 text-left font-medium">Delivered to Warehouse</th>
+            <th class="px-4 py-3 text-center font-medium">Action</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-gray-50">
           {% for t in all_tracks %}
           <tr class="{% if t.id == parcel.id %}bg-indigo-50/40{% else %}hover:bg-gray-50{% endif %} transition-colors">
-            <td class="px-4 py-3 text-xs text-gray-400 font-mono">
-              #{{ t.id }}
-              {% if t.id == parcel.id %}<span class="ml-1 text-indigo-500 font-semibold">←</span>{% endif %}
-            </td>
             <td class="px-4 py-3">
-              {% if t.id == parcel.id %}
-              <span class="font-mono text-xs font-semibold text-gray-800">{{ t.tracking_number }}</span>
-              {% else %}
-              <a href="/portal/parcels/{{ t.id }}" class="font-mono text-xs text-indigo-600 hover:underline">{{ t.tracking_number }}</a>
-              {% endif %}
-              {% if t.title %}<p class="text-xs text-gray-400 truncate max-w-[180px] mt-0.5">{{ t.title }}</p>{% endif %}
-            </td>
-            <td class="px-4 py-3 font-mono text-xs text-gray-600 hidden sm:table-cell">{{ t.asin or "—" }}</td>
-            <td class="px-4 py-3 text-xs text-gray-600 hidden sm:table-cell">{{ t.quantity or "—" }}</td>
-            <td class="px-4 py-3">
-              <span class="text-xs px-2 py-1 rounded-full font-medium {{ STATUS_COLORS.get(t.status, '') }}">
-                {{ STATUS_LABELS.get(t.status, t.status) }}
-              </span>
-              {% if t.status == 'negotiating' and t.negotiations %}
-                {% if t.negotiations[-1].actor == 'admin' %}
-                <p class="text-xs text-amber-600 font-medium mt-0.5">Admin responded ↑</p>
+              <div class="flex items-center gap-2 flex-wrap">
+                {% if t.id != parcel.id %}
+                <a href="/portal/parcels/{{ t.id }}" class="font-mono text-xs font-semibold text-indigo-600 hover:underline">{{ t.tracking_number }}</a>
                 {% else %}
-                <p class="text-xs text-gray-400 mt-0.5">Waiting for admin</p>
+                <span class="font-mono text-xs font-bold text-gray-900">{{ t.tracking_number }}</span>
+                <span class="text-xs text-indigo-400 font-medium">current</span>
                 {% endif %}
+                <span class="text-xs px-1.5 py-0.5 rounded-full font-medium {{ STATUS_COLORS.get(t.status, 'bg-gray-100 text-gray-500') }}">{{ STATUS_LABELS.get(t.status, t.status) }}</span>
+                {% if t.status == 'negotiating' and t.negotiations %}
+                  {% if t.negotiations[-1].actor == 'admin' %}
+                  <span class="text-xs text-amber-600 font-medium">↑ Admin responded</span>
+                  {% endif %}
+                {% endif %}
+              </div>
+              {% if t.title %}
+              <p class="text-xs text-gray-400 truncate max-w-xs mt-0.5">{{ t.title }}</p>
               {% endif %}
             </td>
-            <td class="px-4 py-3 whitespace-nowrap hidden md:table-cell">
+            <td class="px-4 py-3">
+              {% if t.asin %}
+              <a href="https://www.amazon.com/dp/{{ t.asin }}" target="_blank" rel="noopener" class="font-mono text-xs text-indigo-600 hover:underline">{{ t.asin }}</a>
+              {% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            <td class="px-4 py-3 text-right whitespace-nowrap">
+              {% if t.purchase_price is not none %}
+              <span class="font-semibold text-gray-800">${{ "%.2f"|format(t.purchase_price) }}</span>
+              <span class="text-xs text-gray-400 ml-1">{% if t.arrived_at %}actual{% else %}est.{% endif %}</span>
+              {% else %}<span class="text-gray-300">—</span>{% endif %}
+            </td>
+            <td class="px-4 py-3 text-right">
+              <span class="font-medium text-gray-700">{{ t.qty or "—" }}</span>
+            </td>
+            <td class="px-4 py-3 whitespace-nowrap">
               {% if t.arrived_at %}
               <time class="local-time text-xs text-gray-700" datetime="{{ t.arrived_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ t.arrived_at.strftime('%d.%m.%Y %H:%M') }}</time>
               {% elif t.estimated_delivery_at %}
@@ -109,23 +110,17 @@
               <span class="text-xs text-gray-400">In transit</span>
               {% endif %}
             </td>
-            <td class="px-4 py-3 text-xs text-gray-500 hidden md:table-cell">
-              {% if t.amazon_price %}${{ "%.2f"|format(t.amazon_price) }}{% else %}—{% endif %}
-            </td>
-            <td class="px-4 py-3 text-xs font-semibold text-gray-800 hidden md:table-cell">
-              {% if t.purchase_price is not none %}${{ "%.2f"|format(t.purchase_price) }}{% else %}—{% endif %}
-            </td>
-            <td class="px-4 py-3 text-right">
+            <td class="px-4 py-3 text-center">
               {% if t.status == 'delivered' %}
               <button type="button"
                 @click="openModal({{ t.id }}, '{{ t.asin or '' }}', {{ t.amazon_price or 0 }})"
-                class="text-xs font-medium px-3 py-1.5 bg-sky-600 text-white rounded-lg hover:bg-sky-700 transition-colors">
+                class="inline-flex items-center gap-1.5 bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap">
                 Accept
               </button>
               {% elif t.status == 'negotiating' and t.id != parcel.id %}
-              <a href="/portal/parcels/{{ t.id }}" class="text-xs font-medium px-3 py-1.5 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors">
-                View →
-              </a>
+              <a href="/portal/parcels/{{ t.id }}" class="inline-block text-xs font-semibold px-3 py-1.5 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors">View →</a>
+              {% else %}
+              <span class="text-xs text-gray-300">—</span>
               {% endif %}
             </td>
           </tr>
@@ -423,21 +418,111 @@
   <!-- ── Photos ─────────────────────────────────────────────────────────────── -->
   {% set all_photos = [] %}
   {% for t in all_tracks %}{% for ph in t.photos %}{% if all_photos.append(ph) %}{% endif %}{% endfor %}{% endfor %}
-  {% if all_photos %}
-  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-    <h3 class="text-sm font-semibold text-gray-700 mb-4">Photos</h3>
-    <div class="grid grid-cols-3 sm:grid-cols-4 gap-3">
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5 sm:p-6" id="photos"
+       x-data="{
+         dragging: false,
+         pendingFiles: [],
+         caption: '',
+         uploading: false,
+         handleDrop(e) { this.dragging = false; this.handleFiles(e.dataTransfer.files); },
+         handleFiles(fileList) {
+           for (const f of fileList) {
+             if (!f.type.startsWith('image/')) continue;
+             const reader = new FileReader();
+             reader.onload = (ev) => { this.pendingFiles.push({ file: f, preview: ev.target.result, name: f.name }); };
+             reader.readAsDataURL(f);
+           }
+         },
+         remove(i) { this.pendingFiles.splice(i, 1); },
+         upload() {
+           if (!this.pendingFiles.length || this.uploading) return;
+           this.uploading = true;
+           const form = this.$refs.submitForm;
+           form.querySelector('[name=caption]').value = this.caption;
+           const dt = new DataTransfer();
+           this.pendingFiles.forEach(p => dt.items.add(p.file));
+           form.querySelector('[name=files]').files = dt.files;
+           form.submit();
+         }
+       }">
+    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Photos</h3>
+    {% if all_photos %}
+    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-4">
       {% for photo in all_photos %}
-      <div>
-        <a href="{{ photo.file_path }}" target="_blank">
-          <img src="{{ photo.file_path }}" alt="{{ photo.caption or '' }}" class="w-full h-28 object-cover rounded-lg border border-gray-100 hover:opacity-90 transition-opacity" />
+      <div class="relative group rounded-lg overflow-hidden border border-gray-100">
+        <a href="{{ photo.file_path }}" target="_blank" rel="noopener">
+          <img src="{{ photo.file_path }}" alt="{{ photo.caption or '' }}" class="w-full h-28 object-cover hover:opacity-90 transition-opacity" />
         </a>
-        {% if photo.caption %}<p class="text-xs text-gray-500 mt-1 truncate">{{ photo.caption }}</p>{% endif %}
+        {% if photo.caption %}<p class="text-xs text-gray-500 px-2 py-1 truncate bg-white">{{ photo.caption }}</p>{% endif %}
+        <form method="post" action="/portal/parcels/{{ photo.parcel_id }}/photo/{{ photo.id }}/delete"
+              class="absolute top-1 right-1" onsubmit="return confirm('Delete this photo?')">
+          <button type="submit" class="bg-red-500/90 text-white rounded-full w-7 h-7 text-xs flex items-center justify-center hover:bg-red-600 shadow opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">✕</button>
+        </form>
       </div>
       {% endfor %}
     </div>
+    {% else %}
+    <p class="text-sm text-gray-400 mb-4">No photos yet</p>
+    {% endif %}
+    <div class="border-2 border-dashed rounded-xl p-5 text-center transition-colors cursor-pointer select-none"
+         :class="dragging ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200 hover:border-indigo-300 hover:bg-gray-50/60'"
+         @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false"
+         @drop.prevent="handleDrop($event)" @click="$refs.fileInput.click()">
+      <svg class="w-8 h-8 mx-auto mb-2 transition-colors" :class="dragging ? 'text-indigo-400' : 'text-gray-300'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+      </svg>
+      <p class="text-sm font-medium transition-colors" :class="dragging ? 'text-indigo-500' : 'text-gray-500'">
+        <span x-show="!dragging">Tap or drag photos here</span>
+        <span x-show="dragging" x-cloak>Drop to add</span>
+      </p>
+      <p class="text-xs text-gray-400 mt-0.5">JPG, PNG, WEBP</p>
+    </div>
+    <input x-ref="fileInput" type="file" multiple accept="image/*" class="hidden" @change="handleFiles($event.target.files)" />
+    <form x-ref="submitForm" method="post" action="/portal/parcels/{{ parcel.id }}/photo" enctype="multipart/form-data" class="hidden">
+      <input type="hidden" name="caption" value="" />
+      <input type="file" name="files" multiple accept="image/*" />
+    </form>
+    <div x-show="pendingFiles.length > 0" class="mt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3" x-cloak>
+      <template x-for="(f, i) in pendingFiles" :key="i">
+        <div class="relative rounded-lg overflow-hidden border border-indigo-100 bg-indigo-50/30">
+          <img :src="f.preview" class="w-full h-24 object-cover" />
+          <button type="button" @click="remove(i)" class="absolute top-1 right-1 bg-red-500/90 text-white rounded-full w-7 h-7 text-xs flex items-center justify-center hover:bg-red-600 shadow">✕</button>
+          <p x-text="f.name" class="text-xs text-gray-500 px-1 py-0.5 truncate bg-white/80"></p>
+        </div>
+      </template>
+    </div>
+    <div x-show="pendingFiles.length > 0" class="mt-3 flex flex-wrap gap-2 items-center" x-cloak>
+      <input type="text" x-model="caption" placeholder="Caption (optional)" class="flex-1 min-w-36 border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+      <button type="button" @click="upload()" :disabled="uploading" class="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors shrink-0">
+        <span x-show="!uploading">Upload <span x-text="pendingFiles.length + (pendingFiles.length === 1 ? ' photo' : ' photos')"></span></span>
+        <span x-show="uploading" x-cloak>Uploading…</span>
+      </button>
+      <button type="button" @click="pendingFiles = []; caption = ''" :disabled="uploading" class="text-sm text-gray-400 hover:text-gray-600 px-2 py-2 disabled:opacity-40">Clear</button>
+    </div>
   </div>
-  {% endif %}
+
+  <!-- ── Comments ───────────────────────────────────────────────────────────── -->
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5 sm:p-6" id="comments">
+    <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">Comments</h3>
+    <div class="space-y-3 mb-4">
+      {% for c in parcel.comments %}
+      <div class="bg-gray-50 rounded-lg p-3">
+        <div class="flex items-center justify-between mb-1 gap-2">
+          <span class="text-xs font-semibold text-gray-600">{{ c.author or "Anonymous" }}</span>
+          {% if c.created_at %}<time class="local-time text-xs text-gray-400 shrink-0" datetime="{{ c.created_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ c.created_at.strftime('%d.%m.%Y %H:%M') }}</time>{% endif %}
+        </div>
+        <p class="text-sm text-gray-700 whitespace-pre-line">{{ c.body }}</p>
+      </div>
+      {% else %}
+      <p class="text-sm text-gray-400">No comments yet</p>
+      {% endfor %}
+    </div>
+    <form method="post" action="/portal/parcels/{{ parcel.id }}/comment">
+      <textarea name="body" required rows="2" placeholder="Write a comment…"
+                class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 mb-2"></textarea>
+      <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Add Comment</button>
+    </form>
+  </div>
 
   <!-- ── Status history ─────────────────────────────────────────────────────── -->
   <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-5">

@@ -176,10 +176,11 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
         by_tracking.setdefault(p.tracking_number, []).append(p)
 
     if not by_tracking:
-        return {"updated": 0, "skipped": 0, "errors": []}
+        return {"updated": 0, "skipped": 0, "errors": [], "need_price": []}
 
     updated = skipped = 0
     errors: list[str] = []
+    need_price: list[tuple] = []  # (parcel_id, asin, arrived_at, coeff)
 
     for d in deliveries:
         outbound_tracks = _outbound_tracks(d.get("tracks") or [])
@@ -199,21 +200,12 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
                     parcel.arrived_at = delivery_date
                     parcel.estimated_delivery_at = None
                     parcel.status = "delivered"
-
-                    if parcel.asin:
-                        try:
-                            from app.services import keepa_service
-                            coeff = _client_coeff(parcel.client_id, db)
-                            result = keepa_service.get_product_info(parcel.asin, delivery_date, multiplier=coeff)
-                            if result.amazon_price is not None:
-                                parcel.amazon_price = result.amazon_price
-                            if result.cost is not None:
-                                parcel.purchase_price = float(result.cost)
-                            if result.title and not parcel.title:
-                                parcel.title = result.title
-                        except Exception as exc:
-                            errors.append(f"Keepa error for {parcel.tracking_number} ({parcel.asin}): {exc}")
-
+                    # Keepa price fetch moved to background task — just queue it
+                    if parcel.asin and parcel.amazon_price is None:
+                        need_price.append((
+                            parcel.id, parcel.asin, delivery_date,
+                            _client_coeff(parcel.client_id, db),
+                        ))
                     updated += 1
                 else:
                     # Still in transit — delivery_date is the estimated arrival
@@ -224,7 +216,7 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
                         skipped += 1
 
     db.commit()
-    return {"updated": updated, "skipped": skipped, "errors": errors}
+    return {"updated": updated, "skipped": skipped, "errors": errors, "need_price": need_price}
 
 
 def sync(supplier_id: int, username: str, password: str, db,

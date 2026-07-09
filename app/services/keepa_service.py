@@ -21,9 +21,23 @@ import requests
 _API_URL = "https://api.keepa.com/product"
 _KEEPA_EPOCH_OFFSET = 21_564_000
 
+# Tracks remaining Keepa tokens after each API call; None = unknown yet
+_tokens_left: Optional[int] = None
+# Stop calling Keepa if fewer than this many tokens remain
+_MIN_TOKENS = 15
+
 
 class KeepaError(Exception):
     pass
+
+
+def tokens_left() -> Optional[int]:
+    return _tokens_left
+
+
+def has_tokens() -> bool:
+    """True if we either haven't called yet or have enough tokens to proceed."""
+    return _tokens_left is None or _tokens_left >= _MIN_TOKENS
 
 
 @dataclass
@@ -60,6 +74,8 @@ def _price_at(csv_pairs: list[int], keepa_time: int) -> Optional[float]:
 
 
 def _fetch_product(asin: str) -> dict:
+    global _tokens_left
+
     api_key = os.getenv("KEEPA_API_KEY", "")
     if not api_key:
         raise KeepaError("KEEPA_API_KEY is not set in .env")
@@ -77,9 +93,17 @@ def _fetch_product(asin: str) -> dict:
         raise KeepaError(f"Keepa request failed: {exc}") from exc
 
     if r.status_code != 200:
+        # Update token count even from error responses
+        try:
+            _tokens_left = r.json().get("tokensLeft", _tokens_left)
+        except Exception:
+            pass
         raise KeepaError(f"Keepa API HTTP {r.status_code}: {r.text[:200]}")
 
     data = r.json()
+    # Always update token count from response
+    if "tokensLeft" in data:
+        _tokens_left = data["tokensLeft"]
     if data.get("error"):
         raise KeepaError(f"Keepa API error: {data['error'].get('message', data['error'])}")
 

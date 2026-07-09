@@ -26,7 +26,13 @@
     <tbody class="divide-y divide-gray-50">
       {% for c in clients %}
       <tr class="hover:bg-gray-50 transition-colors">
-        <td class="px-4 py-3 font-medium text-gray-800">{{ c.name }}</td>
+        <td class="px-4 py-3 font-medium text-gray-800">
+          {{ c.name }}
+          {% set pend = c.deposits | selectattr('status', 'equalto', 'pending') | list %}
+          {% if pend %}
+          <a href="/clients/{{ c.id }}#deposits" class="ml-2 inline-flex items-center bg-amber-100 text-amber-700 text-xs font-semibold px-1.5 py-0.5 rounded-full hover:bg-amber-200 transition-colors">{{ pend|length }} deposit{{ 's' if pend|length > 1 }}</a>
+          {% endif %}
+        </td>
         <td class="px-4 py-3 text-gray-500">{{ c.email or "—" }}</td>
         <td class="px-4 py-3 text-gray-500">{{ c.phone or "—" }}</td>
         <td class="px-4 py-3">

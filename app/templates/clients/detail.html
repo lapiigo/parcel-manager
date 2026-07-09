@@ -243,6 +243,84 @@
   </div>
   {% endif %}
 
+  <!-- Deposits -->
+  {% set pending_deposits = client.deposits | selectattr('status', 'equalto', 'pending') | list %}
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6" id="deposits">
+    <div class="flex items-center gap-3 mb-4">
+      <h3 class="text-sm font-semibold text-gray-700">Deposits</h3>
+      {% if pending_deposits %}
+      <span class="inline-flex items-center gap-1 bg-amber-100 text-amber-700 text-xs font-semibold px-2 py-0.5 rounded-full">
+        {{ pending_deposits|length }} pending
+      </span>
+      {% endif %}
+    </div>
+    {% if client.deposits %}
+    <table class="w-full text-xs mb-4">
+      <thead class="bg-gray-50 text-gray-500 uppercase tracking-wide font-semibold">
+        <tr>
+          <th class="px-3 py-2 text-left">Date</th>
+          <th class="px-3 py-2 text-right">Amount</th>
+          <th class="px-3 py-2 text-left">Reference</th>
+          <th class="px-3 py-2 text-left">Notes</th>
+          <th class="px-3 py-2 text-left">Status</th>
+          <th class="px-3 py-2 text-left">Screenshot</th>
+          {% if can(current_user, 'edit_client') %}
+          <th class="px-3 py-2 w-36"></th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-50">
+        {% for dep in client.deposits %}
+        <tr class="{% if dep.status == 'pending' %}bg-amber-50/60 hover:bg-amber-50{% else %}hover:bg-gray-50{% endif %} transition-colors">
+          <td class="px-3 py-2 text-gray-500 whitespace-nowrap">
+            {% if dep.created_at %}<time class="local-time" datetime="{{ dep.created_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}">{{ dep.created_at.strftime('%d.%m.%Y') }}</time>{% else %}—{% endif %}
+          </td>
+          <td class="px-3 py-2 text-right font-semibold text-gray-800">${{ "%.2f"|format(dep.amount) }}</td>
+          <td class="px-3 py-2 font-mono text-gray-600">{{ dep.transaction_ref or "—" }}</td>
+          <td class="px-3 py-2 text-gray-500 max-w-xs truncate">{{ dep.notes or "—" }}</td>
+          <td class="px-3 py-2">
+            {% if dep.status == 'pending' %}
+            <span class="inline-flex items-center gap-1 bg-amber-100 text-amber-700 text-xs font-semibold px-2 py-0.5 rounded-full">Pending</span>
+            {% elif dep.status == 'confirmed' %}
+            <span class="inline-flex items-center gap-1 bg-green-100 text-green-700 text-xs font-semibold px-2 py-0.5 rounded-full">Confirmed</span>
+            {% elif dep.status == 'rejected' %}
+            <span class="inline-flex items-center gap-1 bg-red-100 text-red-700 text-xs font-semibold px-2 py-0.5 rounded-full">Rejected</span>
+            {% else %}
+            <span class="text-gray-400">{{ dep.status }}</span>
+            {% endif %}
+            {% if dep.confirmed_by %}
+            <span class="ml-1 text-gray-400">by {{ dep.confirmed_by }}</span>
+            {% endif %}
+          </td>
+          <td class="px-3 py-2">
+            {% if dep.screenshot_path %}
+            <a href="{{ dep.screenshot_path }}" target="_blank" rel="noopener"
+               class="text-indigo-600 hover:underline">View</a>
+            {% else %}—{% endif %}
+          </td>
+          {% if can(current_user, 'edit_client') %}
+          <td class="px-3 py-2">
+            {% if dep.status == 'pending' %}
+            <div class="flex items-center gap-2">
+              <form method="post" action="/parcels/deposits/{{ dep.id }}/confirm">
+                <button type="submit" class="bg-green-600 hover:bg-green-700 text-white text-xs font-medium px-2.5 py-1 rounded-lg transition-colors">Confirm</button>
+              </form>
+              <form method="post" action="/parcels/deposits/{{ dep.id }}/reject">
+                <button type="submit" class="bg-red-100 hover:bg-red-200 text-red-700 text-xs font-medium px-2.5 py-1 rounded-lg transition-colors">Reject</button>
+              </form>
+            </div>
+            {% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-sm text-gray-400">No deposits yet</p>
+    {% endif %}
+  </div>
+
   <!-- Wishlist -->
   <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
     <div class="flex items-center justify-between mb-4">
