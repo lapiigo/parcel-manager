@@ -1,37 +1,30 @@
 """
-UPS tracking via direct browser-emulation (no API key required).
+UPS Tracking via official UPS Developer API (OAuth 2.0).
 
-Flow:
-1. GET tracking page → picks up session cookies incl. XSRF token
-2. POST to UPS internal API with the XSRF token
-3. Parse packageStatus + deliveredDate/Time + gmtOffset from response
-4. Convert local UPS time → UTC using the gmtOffset UPS provides
+Registration (free): https://developer.ups.com
+Create an app → get Client ID + Client Secret → set in .env:
+    UPS_CLIENT_ID=...
+    UPS_CLIENT_SECRET=...
 
-UPS always returns local time at the delivery location and typically
-includes a gmtOffset field (e.g. "-04:00") in the response.
-We use that offset for exact UTC conversion passed to Keepa.
+The official API works from any server IP (no Akamai blocking).
+Token is cached in-process and refreshed automatically when it expires.
 """
 
 from __future__ import annotations
 
+import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
 
-_PAGE_URL = "https://www.ups.com/track"
-_API_URL = "https://www.ups.com/track/api/Track/GetStatus"
+_TOKEN_URL = "https://onlinetools.ups.com/security/v1/oauth/token"
+_TRACK_URL = "https://onlinetools.ups.com/api/track/v1/details/{tracking_number}"
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-}
+# In-process token cache
+_access_token: Optional[str] = None
+_token_expires_at: float = 0.0
 
 
 class UPSError(Exception):
@@ -39,18 +32,48 @@ class UPSError(Exception):
 
 
 def make_session() -> requests.Session:
-    """Create a new browser-like session. Reuse across multiple tracking calls."""
-    s = requests.Session()
-    s.headers.update(_HEADERS)
-    return s
+    """Return a plain session — kept for interface compatibility with night_sync_service."""
+    return requests.Session()
+
+
+def _get_token() -> str:
+    """Return a valid OAuth access token, refreshing if needed."""
+    global _access_token, _token_expires_at
+
+    if _access_token and time.time() < _token_expires_at - 60:
+        return _access_token
+
+    client_id = os.getenv("UPS_CLIENT_ID", "")
+    client_secret = os.getenv("UPS_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        raise UPSError(
+            "UPS_CLIENT_ID and UPS_CLIENT_SECRET are not set in .env. "
+            "Register free at https://developer.ups.com"
+        )
+
+    try:
+        r = requests.post(
+            _TOKEN_URL,
+            data={"grant_type": "client_credentials"},
+            auth=(client_id, client_secret),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise UPSError(f"Token request failed: {exc}") from exc
+
+    if r.status_code != 200:
+        raise UPSError(f"Token endpoint HTTP {r.status_code}: {r.text[:200]}")
+
+    data = r.json()
+    _access_token = data.get("access_token")
+    expires_in = int(data.get("expires_in", 3600))
+    _token_expires_at = time.time() + expires_in
+    return _access_token
 
 
 def _parse_gmt_offset(offset_str: str) -> Optional[timedelta]:
-    """
-    Parse UPS gmtOffset into a timedelta.
-    Handles: "-04:00", "-4", "+5:30", "-0500", "4", "-04", etc.
-    Returns None if offset_str is empty or unparseable.
-    """
+    """Parse UPS gmtOffset string like '-04:00', '-4', '+5:30' → timedelta."""
     s = (offset_str or "").strip().replace(":", "")
     if not s:
         return None
@@ -71,16 +94,13 @@ def _parse_gmt_offset(offset_str: str) -> Optional[timedelta]:
 
 
 def _to_utc(date_str: str, time_str: str, gmt_offset: Optional[timedelta]) -> Optional[datetime]:
-    """
-    Parse UPS date+time strings and convert to naive UTC datetime.
-
-    If gmt_offset is provided (from UPS response), uses it for exact conversion.
-    If gmt_offset is None (UPS didn't include it), returns naive datetime as-is
-    with no timezone assumption — caller should treat it as approximate.
-    """
+    """Parse UPS date+time strings and return naive UTC datetime."""
     combined = f"{date_str} {time_str}".strip()
     parsed: Optional[datetime] = None
     for fmt in (
+        "%Y%m%d %H%M%S",
+        "%Y%m%d %H%M",
+        "%Y%m%d",
         "%m/%d/%Y %I:%M %p",
         "%m/%d/%Y %H:%M",
         "%m/%d/%Y",
@@ -93,122 +113,80 @@ def _to_utc(date_str: str, time_str: str, gmt_offset: Optional[timedelta]) -> Op
             break
         except ValueError:
             continue
-
     if parsed is None:
         return None
-
     if gmt_offset is not None:
-        # UPS gave us the local timezone offset — convert to exact UTC
-        local_tz = timezone(gmt_offset)
-        return parsed.replace(tzinfo=local_tz).astimezone(timezone.utc).replace(tzinfo=None)
-
-    # No offset info — return as-is (naive, approximate local time)
+        return parsed.replace(tzinfo=timezone(gmt_offset)).astimezone(timezone.utc).replace(tzinfo=None)
     return parsed
 
 
 def get_tracking_status(
     tracking_number: str,
-    session: Optional[requests.Session] = None,
+    session: Optional[requests.Session] = None,  # unused, kept for interface compat
 ) -> dict:
     """
-    Check UPS delivery status for a single tracking number.
+    Check UPS delivery status via official API.
 
     Returns:
         {
             "delivered": bool,
-            "delivered_at": datetime | None,  # naive UTC if gmtOffset known, else approx local
+            "delivered_at": datetime | None,  # naive UTC
             "status": str,
         }
 
-    Raises UPSError on network or parse failure.
+    Raises UPSError on failure.
     """
-    if session is None:
-        session = make_session()
-
     tn = tracking_number.strip()
+    token = _get_token()
 
-    # Step 1: load tracking page to acquire cookies / XSRF token
     try:
-        session.get(
-            _PAGE_URL,
-            params={"track": "yes", "trackNums": tn, "requester": "MB/trackdetails"},
-            timeout=15,
-            allow_redirects=True,
-        )
-    except requests.RequestException as exc:
-        raise UPSError(f"GET page failed: {exc}") from exc
-
-    xsrf = (
-        session.cookies.get("X-XSRF-TOKEN-ST")
-        or session.cookies.get("X-XSRF-TOKEN")
-        or ""
-    )
-
-    # Step 2: call internal tracking API
-    try:
-        resp = session.post(
-            _API_URL,
-            params={"loc": "en_US"},
-            json={"Locale": "en_US", "TrackingNumber": [tn]},
+        resp = requests.get(
+            _TRACK_URL.format(tracking_number=tn),
             headers={
-                "Accept": "application/json, text/javascript, */*; q=0.01",
-                "Content-Type": "application/json",
-                "X-XSRF-TOKEN": xsrf,
-                "Referer": f"{_PAGE_URL}?track=yes&trackNums={tn}",
-                "X-Requested-With": "XMLHttpRequest",
-                "Origin": "https://www.ups.com",
+                "Authorization": f"Bearer {token}",
+                "transId": f"pm-{tn[-8:]}",
+                "transactionSrc": "parcel-manager",
             },
+            params={"locale": "en_US", "returnSignature": "false"},
             timeout=15,
         )
     except requests.RequestException as exc:
-        raise UPSError(f"POST API failed: {exc}") from exc
+        raise UPSError(f"Tracking request failed: {exc}") from exc
 
+    if resp.status_code == 404:
+        raise UPSError("Tracking number not found")
     if resp.status_code != 200:
-        raise UPSError(f"UPS API HTTP {resp.status_code}")
+        raise UPSError(f"UPS API HTTP {resp.status_code}: {resp.text[:200]}")
 
     try:
         data = resp.json()
     except Exception as exc:
-        raise UPSError(f"Non-JSON UPS response: {exc}") from exc
+        raise UPSError(f"Non-JSON response: {exc}") from exc
 
-    details = data.get("trackDetails") or []
-    if not details:
-        raise UPSError("No trackDetails in response")
+    # Navigate response: trackResponse.shipment[0].package[0]
+    try:
+        shipment = data["trackResponse"]["shipment"][0]
+        package = shipment["package"][0]
+    except (KeyError, IndexError) as exc:
+        raise UPSError(f"Unexpected response structure: {exc}") from exc
 
-    detail = details[0]
-    status_str = (detail.get("packageStatus") or "").strip()
-    is_delivered = "delivered" in status_str.lower()
+    activity = package.get("activity") or []
+    if not activity:
+        raise UPSError("No activity in tracking response")
+
+    # Latest activity is first in the list
+    latest = activity[0]
+    status_obj = latest.get("status") or {}
+    status_str = status_obj.get("description", "").strip()
+    status_type = status_obj.get("type", "").upper()
+    is_delivered = status_type == "D" or "delivered" in status_str.lower()
 
     delivered_at: Optional[datetime] = None
     if is_delivered:
-        # UPS typically provides gmtOffset in the top-level detail or in activity events
-        raw_offset = (
-            detail.get("gmtOffset")
-            or detail.get("gmtOffsetHours")
-            or detail.get("timeZoneOffset")
-            or ""
-        )
-        # Also check first activity event for offset if top-level missing
-        if not raw_offset:
-            activities = (
-                detail.get("shipmentProgressActivities")
-                or detail.get("activities")
-                or []
-            )
-            if activities:
-                raw_offset = (
-                    activities[0].get("gmtOffset")
-                    or activities[0].get("timeZoneOffset")
-                    or ""
-                )
-
-        gmt_offset = _parse_gmt_offset(str(raw_offset)) if raw_offset else None
-
-        delivered_at = _to_utc(
-            detail.get("deliveredDate", ""),
-            detail.get("deliveredTime", ""),
-            gmt_offset,
-        )
+        raw_date = latest.get("date", "")  # e.g. "20241015"
+        raw_time = latest.get("time", "")  # e.g. "143000"
+        gmt_offset = _parse_gmt_offset(latest.get("gmtOffset", ""))
+        delivered_at = _to_utc(raw_date, raw_time, gmt_offset)
 
     return {
         "delivered": is_delivered,
