@@ -1,13 +1,19 @@
 """
-UPS Tracking via official UPS Developer API (OAuth 2.0).
+UPS tracking via 17track.net API.
 
-Registration (free): https://developer.ups.com
-Create an app → get Client ID + Client Secret → set in .env:
-    UPS_CLIENT_ID=...
-    UPS_CLIENT_SECRET=...
+Register free (2 min, no business info): https://api.17track.net
+Set SEVENTEENTRACK_API_KEY in .env after registration.
 
-The official API works from any server IP (no Akamai blocking).
-Token is cached in-process and refreshed automatically when it expires.
+Free tier: 100 trackings/month.
+Paid plans available if needed.
+
+Flow:
+1. POST /track/v2/register  — register tracking number (idempotent)
+2. POST /track/v2/gettrackinfo  — get full event list
+3. Find first delivered event → return UTC datetime
+
+When UPS_CLIENT_ID + UPS_CLIENT_SECRET are set, uses official UPS API instead
+(more reliable, unlimited). 17track is the fallback / quick-start option.
 """
 
 from __future__ import annotations
@@ -19,12 +25,16 @@ from typing import Optional
 
 import requests
 
-_TOKEN_URL = "https://onlinetools.ups.com/security/v1/oauth/token"
-_TRACK_URL = "https://onlinetools.ups.com/api/track/v1/details/{tracking_number}"
+# ── 17track ──────────────────────────────────────────────────────────────────
+_17T_BASE = "https://api.17track.net/track/v2"
+_17T_CARRIER_UPS = 100046
 
-# In-process token cache
-_access_token: Optional[str] = None
-_token_expires_at: float = 0.0
+# ── UPS official API ──────────────────────────────────────────────────────────
+_UPS_TOKEN_URL = "https://onlinetools.ups.com/security/v1/oauth/token"
+_UPS_TRACK_URL = "https://onlinetools.ups.com/api/track/v1/details/{tn}"
+
+_ups_access_token: Optional[str] = None
+_ups_token_expires_at: float = 0.0
 
 
 class UPSError(Exception):
@@ -32,48 +42,12 @@ class UPSError(Exception):
 
 
 def make_session() -> requests.Session:
-    """Return a plain session — kept for interface compatibility with night_sync_service."""
     return requests.Session()
 
 
-def _get_token() -> str:
-    """Return a valid OAuth access token, refreshing if needed."""
-    global _access_token, _token_expires_at
-
-    if _access_token and time.time() < _token_expires_at - 60:
-        return _access_token
-
-    client_id = os.getenv("UPS_CLIENT_ID", "")
-    client_secret = os.getenv("UPS_CLIENT_SECRET", "")
-    if not client_id or not client_secret:
-        raise UPSError(
-            "UPS_CLIENT_ID and UPS_CLIENT_SECRET are not set in .env. "
-            "Register free at https://developer.ups.com"
-        )
-
-    try:
-        r = requests.post(
-            _TOKEN_URL,
-            data={"grant_type": "client_credentials"},
-            auth=(client_id, client_secret),
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=15,
-        )
-    except requests.RequestException as exc:
-        raise UPSError(f"Token request failed: {exc}") from exc
-
-    if r.status_code != 200:
-        raise UPSError(f"Token endpoint HTTP {r.status_code}: {r.text[:200]}")
-
-    data = r.json()
-    _access_token = data.get("access_token")
-    expires_in = int(data.get("expires_in", 3600))
-    _token_expires_at = time.time() + expires_in
-    return _access_token
-
+# ── shared helpers ────────────────────────────────────────────────────────────
 
 def _parse_gmt_offset(offset_str: str) -> Optional[timedelta]:
-    """Parse UPS gmtOffset string like '-04:00', '-4', '+5:30' → timedelta."""
     s = (offset_str or "").strip().replace(":", "")
     if not s:
         return None
@@ -93,20 +67,21 @@ def _parse_gmt_offset(offset_str: str) -> Optional[timedelta]:
     return None
 
 
-def _to_utc(date_str: str, time_str: str, gmt_offset: Optional[timedelta]) -> Optional[datetime]:
-    """Parse UPS date+time strings and return naive UTC datetime."""
+def _parse_dt_to_utc(date_str: str, time_str: str = "", gmt_offset: Optional[timedelta] = None) -> Optional[datetime]:
+    """Parse date/time strings and return naive UTC datetime."""
     combined = f"{date_str} {time_str}".strip()
     parsed: Optional[datetime] = None
     for fmt in (
         "%Y%m%d %H%M%S",
         "%Y%m%d %H%M",
         "%Y%m%d",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
         "%m/%d/%Y %I:%M %p",
         "%m/%d/%Y %H:%M",
         "%m/%d/%Y",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d",
     ):
         try:
             parsed = datetime.strptime(combined, fmt)
@@ -120,76 +95,149 @@ def _to_utc(date_str: str, time_str: str, gmt_offset: Optional[timedelta]) -> Op
     return parsed
 
 
+# ── 17track implementation ────────────────────────────────────────────────────
+
+def _17track_headers() -> dict:
+    key = os.getenv("SEVENTEENTRACK_API_KEY", "")
+    if not key:
+        raise UPSError(
+            "SEVENTEENTRACK_API_KEY is not set. "
+            "Register free at https://api.17track.net"
+        )
+    return {"17token": key, "Content-Type": "application/json"}
+
+
+def _get_status_via_17track(tn: str) -> dict:
+    headers = _17track_headers()
+    payload = [{"number": tn, "carrier": _17T_CARRIER_UPS}]
+
+    # Register (idempotent)
+    try:
+        requests.post(f"{_17T_BASE}/register", json=payload, headers=headers, timeout=15)
+    except requests.RequestException:
+        pass  # non-fatal
+
+    # Fetch
+    try:
+        r = requests.post(f"{_17T_BASE}/gettrackinfo", json=payload, headers=headers, timeout=20)
+    except requests.RequestException as exc:
+        raise UPSError(f"17track network error: {exc}") from exc
+
+    if r.status_code == 401:
+        raise UPSError("Invalid SEVENTEENTRACK_API_KEY")
+    if r.status_code != 200:
+        raise UPSError(f"17track HTTP {r.status_code}: {r.text[:200]}")
+
+    data = r.json()
+    if data.get("code") != 0:
+        raise UPSError(f"17track API error: {data}")
+
+    accepted = (data.get("data") or {}).get("accepted") or []
+    if not accepted:
+        rejected = (data.get("data") or {}).get("rejected") or []
+        reason = rejected[0].get("error", {}).get("message", "rejected") if rejected else "no data"
+        raise UPSError(f"17track rejected {tn}: {reason}")
+
+    track_info = accepted[0].get("track") or {}
+    events: list[dict] = track_info.get("z1") or []
+
+    for event in events:
+        status_code = str(event.get("z") or event.get("status") or "")
+        description = (event.get("z1") or event.get("d") or "").lower()
+
+        # 40 = Delivered in 17track status codes
+        if status_code == "40" or "deliver" in description:
+            dt_str = event.get("a") or event.get("date") or ""
+            delivered_at = _parse_dt_to_utc(dt_str)
+            return {
+                "delivered": True,
+                "delivered_at": delivered_at,
+                "status": event.get("z1") or event.get("d") or "Delivered",
+            }
+
+    # Not yet delivered — return current status
+    latest_status = ""
+    if events:
+        latest_status = events[0].get("z1") or events[0].get("d") or ""
+
+    return {"delivered": False, "delivered_at": None, "status": latest_status}
+
+
+# ── UPS official API implementation ──────────────────────────────────────────
+
+def _get_ups_token() -> str:
+    global _ups_access_token, _ups_token_expires_at
+    if _ups_access_token and time.time() < _ups_token_expires_at - 60:
+        return _ups_access_token
+    client_id = os.getenv("UPS_CLIENT_ID", "")
+    client_secret = os.getenv("UPS_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        raise UPSError("UPS_CLIENT_ID / UPS_CLIENT_SECRET not set")
+    r = requests.post(
+        _UPS_TOKEN_URL,
+        data={"grant_type": "client_credentials"},
+        auth=(client_id, client_secret),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        timeout=15,
+    )
+    if r.status_code != 200:
+        raise UPSError(f"UPS token HTTP {r.status_code}")
+    data = r.json()
+    _ups_access_token = data["access_token"]
+    _ups_token_expires_at = time.time() + int(data.get("expires_in", 3600))
+    return _ups_access_token
+
+
+def _get_status_via_ups_api(tn: str) -> dict:
+    token = _get_ups_token()
+    r = requests.get(
+        _UPS_TRACK_URL.format(tn=tn),
+        headers={"Authorization": f"Bearer {token}", "transId": f"pm-{tn[-8:]}", "transactionSrc": "parcel-manager"},
+        params={"locale": "en_US", "returnSignature": "false"},
+        timeout=15,
+    )
+    if r.status_code == 404:
+        raise UPSError("Tracking number not found")
+    if r.status_code != 200:
+        raise UPSError(f"UPS API HTTP {r.status_code}: {r.text[:200]}")
+
+    package = r.json()["trackResponse"]["shipment"][0]["package"][0]
+    activity = package.get("activity") or []
+    if not activity:
+        raise UPSError("No activity in response")
+
+    latest = activity[0]
+    status_obj = latest.get("status") or {}
+    status_str = status_obj.get("description", "").strip()
+    is_delivered = status_obj.get("type", "").upper() == "D" or "delivered" in status_str.lower()
+
+    delivered_at: Optional[datetime] = None
+    if is_delivered:
+        gmt_offset = _parse_gmt_offset(latest.get("gmtOffset", ""))
+        delivered_at = _parse_dt_to_utc(latest.get("date", ""), latest.get("time", ""), gmt_offset)
+
+    return {"delivered": is_delivered, "delivered_at": delivered_at, "status": status_str}
+
+
+# ── public interface ──────────────────────────────────────────────────────────
+
 def get_tracking_status(
     tracking_number: str,
-    session: Optional[requests.Session] = None,  # unused, kept for interface compat
+    session: Optional[requests.Session] = None,
 ) -> dict:
     """
-    Check UPS delivery status via official API.
+    Check UPS delivery status.
+
+    Uses UPS official API if UPS_CLIENT_ID is set, otherwise 17track.net.
 
     Returns:
-        {
-            "delivered": bool,
-            "delivered_at": datetime | None,  # naive UTC
-            "status": str,
-        }
+        {"delivered": bool, "delivered_at": datetime|None, "status": str}
 
     Raises UPSError on failure.
     """
     tn = tracking_number.strip()
-    token = _get_token()
 
-    try:
-        resp = requests.get(
-            _TRACK_URL.format(tracking_number=tn),
-            headers={
-                "Authorization": f"Bearer {token}",
-                "transId": f"pm-{tn[-8:]}",
-                "transactionSrc": "parcel-manager",
-            },
-            params={"locale": "en_US", "returnSignature": "false"},
-            timeout=15,
-        )
-    except requests.RequestException as exc:
-        raise UPSError(f"Tracking request failed: {exc}") from exc
-
-    if resp.status_code == 404:
-        raise UPSError("Tracking number not found")
-    if resp.status_code != 200:
-        raise UPSError(f"UPS API HTTP {resp.status_code}: {resp.text[:200]}")
-
-    try:
-        data = resp.json()
-    except Exception as exc:
-        raise UPSError(f"Non-JSON response: {exc}") from exc
-
-    # Navigate response: trackResponse.shipment[0].package[0]
-    try:
-        shipment = data["trackResponse"]["shipment"][0]
-        package = shipment["package"][0]
-    except (KeyError, IndexError) as exc:
-        raise UPSError(f"Unexpected response structure: {exc}") from exc
-
-    activity = package.get("activity") or []
-    if not activity:
-        raise UPSError("No activity in tracking response")
-
-    # Latest activity is first in the list
-    latest = activity[0]
-    status_obj = latest.get("status") or {}
-    status_str = status_obj.get("description", "").strip()
-    status_type = status_obj.get("type", "").upper()
-    is_delivered = status_type == "D" or "delivered" in status_str.lower()
-
-    delivered_at: Optional[datetime] = None
-    if is_delivered:
-        raw_date = latest.get("date", "")  # e.g. "20241015"
-        raw_time = latest.get("time", "")  # e.g. "143000"
-        gmt_offset = _parse_gmt_offset(latest.get("gmtOffset", ""))
-        delivered_at = _to_utc(raw_date, raw_time, gmt_offset)
-
-    return {
-        "delivered": is_delivered,
-        "delivered_at": delivered_at,
-        "status": status_str,
-    }
+    if os.getenv("UPS_CLIENT_ID", ""):
+        return _get_status_via_ups_api(tn)
+    else:
+        return _get_status_via_17track(tn)
