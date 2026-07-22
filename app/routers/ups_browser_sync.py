@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      3.0
+// @version      3.1
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -147,10 +147,8 @@ function showBanner(text) {
     return el;
 }
 
-// UPS form requires one tracking number per line, not comma-separated.
-function gotoTrackPage(tns) {
-    var q = encodeURIComponent(tns.join('\\n'));
-    window.location.replace('https://www.ups.com/track?trackNums=' + q);
+function gotoTrackPage() {
+    window.location.replace('https://www.ups.com/track');
 }
 
 async function waitCapture(ms) {
@@ -159,21 +157,40 @@ async function waitCapture(ms) {
     return captured.length > 0;
 }
 
-async function clickTrack() {
-    var end = Date.now() + 6000;
-    while (Date.now() < end) {
-        var btns = document.querySelectorAll('button');
-        for (var i = 0; i < btns.length; i++) {
-            var txt = (btns[i].textContent || '').trim();
-            if (/^track$/i.test(txt)) {
-                console.log('[PM] Clicking Track button');
-                btns[i].click();
-                return true;
-            }
-        }
-        await sleep(300);
+// Fill UPS textarea using React's internal setter (bypasses React's value tracking)
+async function fillAndTrack(tns) {
+    // Wait for textarea to appear
+    var ta = null;
+    var end = Date.now() + 8000;
+    while (!ta && Date.now() < end) {
+        ta = document.querySelector('textarea');
+        if (!ta) await sleep(300);
     }
-    console.warn('[PM] Track button not found in 6s');
+    if (!ta) { console.warn('[PM] No textarea found'); return false; }
+
+    // React tracks the "last known value" on the element's internal descriptor.
+    // Setting .value directly is ignored by React's onChange. Use the native setter.
+    var nativeSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+    if (nativeSetter && nativeSetter.set) {
+        nativeSetter.set.call(ta, tns.join('\\n'));
+    } else {
+        ta.value = tns.join('\\n');
+    }
+    ta.dispatchEvent(new Event('input',  { bubbles: true }));
+    ta.dispatchEvent(new Event('change', { bubbles: true }));
+    console.log('[PM] Filled textarea with', tns.length, 'tracking numbers');
+
+    // Find and click the Track button
+    await sleep(300);
+    var btns = document.querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) {
+        if (/^track/i.test((btns[i].textContent || '').trim())) {
+            console.log('[PM] Clicking Track button');
+            btns[i].click();
+            return true;
+        }
+    }
+    console.warn('[PM] Track button not found');
     return false;
 }
 
@@ -206,7 +223,7 @@ async function main() {
         SS.setItem('__pm_tns', JSON.stringify(tns));
         SS.setItem('__pm_res', '[]');
         SS.setItem('__pm_idx', '0');
-        gotoTrackPage(tns.slice(0, BATCH));
+        gotoTrackPage();
         return;
     }
 
@@ -223,12 +240,12 @@ async function main() {
     console.log('[PM] Phase B: batch', idx + 1, 'of', total);
     var bEl = showBanner('⏳ Parcel Manager: партія ' + (idx + 1) + '/' + total + '…');
 
-    // Wait for UPS to auto-call GetStatus (triggered by ?trackNums= in URL)
-    var got = await waitCapture(8000);
-    if (!got) {
-        await clickTrack();
-        got = await waitCapture(12000);
-    }
+    // Fill UPS textarea directly and click Track — more reliable than URL pre-fill
+    var batch = allTNs.slice(idx * BATCH, (idx + 1) * BATCH);
+    await fillAndTrack(batch);
+
+    // Wait for UPS's own GetStatus call to be intercepted
+    var got = await waitCapture(15000);
     if (!got) {
         bEl.textContent = '⚠️ UPS не відповів на GetStatus. Закриття через 20с…';
         await sleep(20000);
@@ -244,7 +261,6 @@ async function main() {
     });
     console.log('[PM] Mapped', Object.keys(byTN).length, 'unique results');
 
-    var batch = allTNs.slice(idx * BATCH, (idx + 1) * BATCH);
     batch.forEach(function (tn) {
         var d         = byTN[tn] || {};
         var status    = (d.packageStatus || '').trim();
@@ -267,7 +283,7 @@ async function main() {
     var next = idx + 1;
     if (next < total) {
         SS.setItem('__pm_idx', String(next));
-        gotoTrackPage(allTNs.slice(next * BATCH, (next + 1) * BATCH));
+        gotoTrackPage();
         return;
     }
 
