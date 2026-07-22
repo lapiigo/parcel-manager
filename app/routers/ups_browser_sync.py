@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      1.3
+// @version      1.4
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -74,9 +74,11 @@ _USERSCRIPT = """\
 (async function () {
     'use strict';
 
-    const params = new URLSearchParams(window.location.search);
-    const pmToken  = params.get('__pm_token');
-    const pmServer = params.get('__pm_server');
+    // Params are passed via URL hash (#pm_token=...&pm_server=...)
+    // so UPS's SPA doesn't strip them when processing the query string.
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const pmToken  = hashParams.get('pm_token');
+    const pmServer = hashParams.get('pm_server');
     if (!pmToken || !pmServer) return;   // normal UPS page, not our sync
 
     console.log('[PM Sync] Starting UPS sync, token:', pmToken);
@@ -249,11 +251,9 @@ def start_sync(
     return {
         "token":   token,
         "count":   len(tracking_numbers),
-        "ups_url": (
-            f"https://www.ups.com/track?trackNums=1ZDUMMY"
-            f"&__pm_token={token}"
-            f"&__pm_server={base}"
-        ),
+        # Pass params via URL hash (#) so UPS SPA doesn't strip them
+        # when it reads and processes the ?trackNums query string.
+        "ups_url": f"https://www.ups.com/track#pm_token={token}&pm_server={base}",
     }
 
 
