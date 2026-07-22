@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      3.2
+// @version      3.3
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -200,17 +200,27 @@ async function fillAndTrack(tns) {
     ta.dispatchEvent(new Event('change', { bubbles: true }));
     console.log('[PM] Filled textarea with', tns.length, 'tracking numbers');
 
-    // Find and click the Track button
+    // Find the Track submit button — look inside the textarea's form first,
+    // then fall back to any button whose full text is exactly "Track" (not "Tracking")
     await sleep(300);
-    var btns = document.querySelectorAll('button');
-    for (var i = 0; i < btns.length; i++) {
-        if (/^track/i.test((btns[i].textContent || '').trim())) {
-            console.log('[PM] Clicking Track button');
-            btns[i].click();
-            return true;
+    var btn = null;
+    var form = ta.closest('form');
+    if (form) {
+        btn = form.querySelector('button[type="submit"]') || form.querySelector('button');
+    }
+    if (!btn) {
+        var btns = document.querySelectorAll('button');
+        for (var i = 0; i < btns.length; i++) {
+            var txt = (btns[i].textContent || '').trim().replace(/\s+/g, ' ');
+            if (/^track(\s*[>›»])?$/i.test(txt)) { btn = btns[i]; break; }
         }
     }
-    console.warn('[PM] Track button not found');
+    if (btn) {
+        console.log('[PM] Clicking:', (btn.textContent || '').trim());
+        btn.click();
+        return true;
+    }
+    console.warn('[PM] Track submit button not found');
     return false;
 }
 
