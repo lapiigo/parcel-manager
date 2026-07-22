@@ -257,7 +257,7 @@ def sync(supplier_id: int, username: str, password: str, db,
     errors: list[str] = []
 
     for d in deliveries:
-        ext_id = str(d.get("externalId") or d.get("deliveryId") or "").strip()
+        ext_id = str(d.get("id") or "").strip()
         items: list[dict] = d.get("items") or []
         outbound_tracks = _outbound_tracks(d.get("tracks") or [])
 
