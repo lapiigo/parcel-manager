@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      1.7
+// @version      1.8
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -132,9 +132,18 @@ console.log('[PM Sync] document-start, hash captured:', _PM_HASH);
     function randomDelay() { return Math.random() * 1000 + 1000; }  // 1-2 s
 
     function getXsrf() {
+        const all = {};
         for (const c of document.cookie.split(';')) {
-            const [k, v] = c.trim().split('=');
-            if (k === 'X-XSRF-TOKEN-ST' || k === 'X-XSRF-TOKEN') return decodeURIComponent(v || '');
+            const idx = c.indexOf('=');
+            if (idx < 0) continue;
+            const k = c.slice(0, idx).trim();
+            const v = c.slice(idx + 1).trim();
+            all[k] = v;
+        }
+        console.log('[PM Sync] All cookies:', Object.keys(all).join(', '));
+        // Try multiple known XSRF cookie names UPS uses
+        for (const name of ['X-XSRF-TOKEN-ST', 'X-XSRF-TOKEN', 'XSRF-TOKEN', '_abck']) {
+            if (all[name]) return decodeURIComponent(all[name]);
         }
         return '';
     }
@@ -151,8 +160,9 @@ console.log('[PM Sync] document-start, hash captured:', _PM_HASH);
     const trackingNumbers = pending.tracking_numbers || [];
     console.log('[PM Sync]', trackingNumbers.length, 'parcels to check');
 
-    // ── 2. wait for UPS cookies (page may still be loading) ──────────────────
-    await sleep(2000);
+    // ── 2. wait for Akamai/UPS to fully initialize session ───────────────────
+    console.log('[PM Sync] Waiting 6s for UPS session to initialize…');
+    await sleep(6000);
 
     const xsrf = getXsrf();
     console.log('[PM Sync] XSRF token found:', xsrf ? xsrf.slice(0, 10) + '…' : '(EMPTY — requests may fail)');
@@ -165,14 +175,19 @@ console.log('[PM Sync] document-start, hash captured:', _PM_HASH);
     for (let i = 0; i < trackingNumbers.length; i += BATCH_SIZE) {
         const batch = trackingNumbers.slice(i, i + BATCH_SIZE);
         try {
+            // Use relative URL (same-origin) — absolute URL can trigger Akamai
             const resp = await fetch(
-                'https://www.ups.com/track/api/Track/GetStatus?loc=en_US',
+                '/track/api/Track/GetStatus?loc=en_US',
                 {
                     method: 'POST',
+                    credentials: 'include',
                     headers: {
                         'Content-Type': 'application/json',
+                        'Accept': 'application/json, text/plain, */*',
                         'X-XSRF-TOKEN': xsrf,
                         'X-Requested-With': 'XMLHttpRequest',
+                        'Origin': 'https://www.ups.com',
+                        'Referer': 'https://www.ups.com/track',
                     },
                     body: JSON.stringify({ Locale: 'en_US', TrackingNumber: batch }),
                 }
