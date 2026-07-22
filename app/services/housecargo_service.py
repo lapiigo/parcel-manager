@@ -146,6 +146,24 @@ def _client_coeff(client_id, db) -> float:
     return c.cost_coefficient if (c and c.cost_coefficient is not None) else 0.45
 
 
+def _is_priced(d: dict, items: list[dict]) -> bool:
+    """
+    Return True when a HouseCargo delivery has already been priced/paid.
+    Check both root-level fields and per-item fields because the raw API
+    may return priceOtdFinal inside items[] only.
+    """
+    for key in ("priceOtdFinal", "priceOtd"):
+        val = d.get(key)
+        if val is not None and val != 0:
+            return True
+    for it in items:
+        for key in ("priceOtdFinal", "priceOtd"):
+            val = it.get(key)
+            if val is not None and val != 0:
+                return True
+    return False
+
+
 def sync_transit_updates(supplier_id: int, username: str, password: str, db,
                          client_id: int | None = None) -> dict:
     """
@@ -183,6 +201,9 @@ def sync_transit_updates(supplier_id: int, username: str, password: str, db,
     need_price: list[tuple] = []  # (parcel_id, asin, arrived_at, coeff)
 
     for d in deliveries:
+        items_d: list[dict] = d.get("items") or []
+        if _is_priced(d, items_d):
+            continue
         outbound_tracks = _outbound_tracks(d.get("tracks") or [])
         for track_obj in outbound_tracks:
             tracking = track_obj["number"]
@@ -240,8 +261,9 @@ def sync(supplier_id: int, username: str, password: str, db,
         items: list[dict] = d.get("items") or []
         outbound_tracks = _outbound_tracks(d.get("tracks") or [])
 
-        # Skip deliveries that have been paid out on HouseCargo side
-        if d.get("priceOtdFinal") is not None:
+        # Skip deliveries that have been priced/paid on HouseCargo side.
+        # priceOtdFinal may appear at root level or inside items[]; check both.
+        if _is_priced(d, items):
             skipped += len(outbound_tracks) or 1
             continue
 
