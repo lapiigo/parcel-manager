@@ -63,26 +63,32 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      1.5
+// @version      1.6
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
 // @grant        GM_xmlhttpRequest
-// @run-at       document-idle
+// @run-at       document-start
 // ==/UserScript==
+
+// Capture hash IMMEDIATELY — UPS SPA clears it via history.replaceState before document-idle
+const _PM_HASH = window.location.hash;
+console.log('[PM Sync] document-start, hash captured:', _PM_HASH);
 
 (async function () {
     'use strict';
 
-    console.log('[PM Sync] script loaded, hash:', window.location.hash);
+    // Wait for page to be interactive before making API calls
+    await new Promise(resolve => {
+        if (document.readyState !== 'loading') { resolve(); return; }
+        document.addEventListener('DOMContentLoaded', resolve, { once: true });
+    });
 
-    // Params are passed via URL hash (#pm_token=...&pm_server=...)
-    // so UPS's SPA doesn't strip them when processing the query string.
-    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const hashParams = new URLSearchParams(_PM_HASH.replace(/^#/, ''));
     const pmToken  = hashParams.get('pm_token');
     const pmServer = hashParams.get('pm_server');
     if (!pmToken || !pmServer) {
-        console.log('[PM Sync] no pm_token/pm_server in hash — normal UPS page, exiting');
+        console.log('[PM Sync] no pm_token/pm_server — normal UPS page, exiting');
         return;
     }
 
@@ -98,7 +104,7 @@ _USERSCRIPT = """\
         'font-family:sans-serif',
     ].join(';');
     banner.textContent = '⏳ Parcel Manager: синхронізація UPS…';
-    document.body ? document.body.prepend(banner) : document.addEventListener('DOMContentLoaded', () => document.body.prepend(banner));
+    document.body.prepend(banner);
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
