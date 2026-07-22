@@ -9,6 +9,116 @@
       Sync
     </button>
   </form>
+  <div x-data="upsBrowserSync()" x-init="init()">
+    <button @click="openModal()"
+            class="inline-flex items-center gap-2 border border-amber-400 text-amber-700 hover:bg-amber-50 text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+      UPS via Browser
+    </button>
+
+    <!-- Modal -->
+    <div x-show="modalOpen" x-cloak
+         class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+         @keydown.escape.window="closeModal()">
+      <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-md" @click.stop>
+
+        <!-- Step 1: Install script (shown only first time or manually) -->
+        <div x-show="step === 'install'">
+          <h3 class="text-lg font-semibold text-gray-800 mb-1">UPS Browser Sync</h3>
+          <p class="text-sm text-gray-500 mb-4">
+            Щоб синхронізація працювала через ваш браузер, потрібно одноразово встановити скрипт Tampermonkey.
+          </p>
+          <ol class="text-sm text-gray-700 space-y-2 mb-5">
+            <li class="flex gap-2"><span class="font-bold text-indigo-600">1.</span>
+              Встановіть розширення
+              <a href="https://www.tampermonkey.net/" target="_blank" class="text-indigo-600 underline">Tampermonkey</a>
+              для вашого браузера (якщо ще не встановлено).
+            </li>
+            <li class="flex gap-2"><span class="font-bold text-indigo-600">2.</span>
+              <span>Натисніть кнопку нижче — Tampermonkey запропонує встановити скрипт:</span>
+            </li>
+          </ol>
+          <div class="flex gap-3 justify-end">
+            <button @click="closeModal()" class="text-sm text-gray-500 hover:text-gray-700">Скасувати</button>
+            <a :href="scriptUrl" target="_blank"
+               class="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              Встановити скрипт
+            </a>
+            <button @click="step = 'ready'"
+                    class="inline-flex items-center gap-2 border border-amber-400 text-amber-700 hover:bg-amber-50 text-sm font-medium px-4 py-2 rounded-lg">
+              Вже встановлено →
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 2: Ready to sync -->
+        <div x-show="step === 'ready'">
+          <h3 class="text-lg font-semibold text-gray-800 mb-1">Запустити UPS синхронізацію</h3>
+          <p class="text-sm text-gray-500 mb-4">
+            Браузер відкриє вкладку UPS.com. Tampermonkey скрипт автоматично перевірить всі трекінги та закриє вкладку.
+            <br><span class="text-amber-600 font-medium">Не закривайте вікно браузера під час синхронізації.</span>
+          </p>
+          <div x-show="errorMsg" class="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700" x-text="errorMsg"></div>
+          <div class="flex gap-3 justify-end">
+            <button @click="step = 'install'" class="text-sm text-gray-500 hover:text-gray-700">← Встановити скрипт</button>
+            <button @click="closeModal()" class="text-sm text-gray-500 hover:text-gray-700">Скасувати</button>
+            <button @click="startSync()" :disabled="syncing"
+                    class="inline-flex items-center gap-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg">
+              <svg x-show="!syncing" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <svg x-show="syncing" class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+              Розпочати
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 3: In progress -->
+        <div x-show="step === 'progress'">
+          <h3 class="text-lg font-semibold text-gray-800 mb-1">Синхронізація UPS…</h3>
+          <p class="text-sm text-gray-500 mb-4">
+            Вкладку UPS відкрито. Перевіряємо трекінги — не закривайте браузер.
+          </p>
+          <div class="mb-2 flex justify-between text-xs text-gray-500">
+            <span x-text="`${processed} / ${total}`"></span>
+            <span x-text="Math.round(processed/Math.max(total,1)*100) + '%'"></span>
+          </div>
+          <div class="w-full bg-gray-200 rounded-full h-3 mb-4 overflow-hidden">
+            <div class="h-3 rounded-full bg-amber-400 transition-all duration-500"
+                 :style="`width:${Math.round(processed/Math.max(total,1)*100)}%`"></div>
+          </div>
+          <p class="text-xs text-gray-400 text-center">Оновлення кожні 2 секунди…</p>
+        </div>
+
+        <!-- Step 4: Done -->
+        <div x-show="step === 'done'">
+          <div class="text-center mb-4">
+            <div class="text-4xl mb-2">✅</div>
+            <h3 class="text-lg font-semibold text-gray-800">Синхронізацію завершено!</h3>
+          </div>
+          <div class="grid grid-cols-2 gap-3 mb-5 text-center">
+            <div class="bg-green-50 rounded-lg p-3">
+              <div class="text-2xl font-bold text-green-700" x-text="resultUpdated"></div>
+              <div class="text-xs text-green-600">Доставлено (оновлено)</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3">
+              <div class="text-2xl font-bold text-gray-600" x-text="total - resultUpdated - resultErrors"></div>
+              <div class="text-xs text-gray-500">Ще в дорозі</div>
+            </div>
+          </div>
+          <div x-show="resultErrors > 0" class="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">
+            <span x-text="resultErrors"></span> помилок при перевірці
+          </div>
+          <div class="flex gap-3 justify-center">
+            <button @click="closeModal(); location.reload()"
+                    class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-5 py-2 rounded-lg">
+              Оновити сторінку
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
   {% endif %}
   {% if can(current_user, 'create_parcel') %}
   <a href="/parcels/new" class="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
@@ -446,5 +556,91 @@ function bulkSelect() {
   }
 }
 
+function upsBrowserSync() {
+  return {
+    modalOpen: false,
+    step: 'ready',        // 'install' | 'ready' | 'progress' | 'done'
+    syncing: false,
+    token: null,
+    total: 0,
+    processed: 0,
+    resultUpdated: 0,
+    resultErrors: 0,
+    errorMsg: '',
+    scriptUrl: window.location.origin + '/ups-sync/script.user.js',
+    _pollTimer: null,
+
+    init() {
+      // Show install step first time (localStorage flag)
+      if (!localStorage.getItem('ups_tm_installed')) {
+        this.step = 'install';
+      }
+    },
+
+    openModal() {
+      this.errorMsg = '';
+      this.modalOpen = true;
+    },
+
+    closeModal() {
+      this.modalOpen = false;
+      this.syncing = false;
+      if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
+    },
+
+    async startSync() {
+      this.syncing = true;
+      this.errorMsg = '';
+      localStorage.setItem('ups_tm_installed', '1');
+
+      try {
+        const resp = await fetch('/ups-sync/start', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        this.token = data.token;
+        this.total = data.count;
+        this.processed = 0;
+
+        if (this.total === 0) {
+          this.step = 'done';
+          this.resultUpdated = 0;
+          this.resultErrors = 0;
+          this.syncing = false;
+          return;
+        }
+
+        // Open UPS tab
+        window.open(data.ups_url, '_blank');
+        this.step = 'progress';
+
+        // Poll for progress
+        this._pollTimer = setInterval(() => this.poll(), 2000);
+
+      } catch (e) {
+        this.errorMsg = 'Помилка запуску: ' + e.message;
+        this.syncing = false;
+      }
+    },
+
+    async poll() {
+      if (!this.token) return;
+      try {
+        const resp = await fetch('/ups-sync/status?token=' + this.token);
+        const data = await resp.json();
+        this.processed = data.processed || 0;
+        this.total = data.total || this.total;
+
+        if (data.status === 'done') {
+          clearInterval(this._pollTimer);
+          this._pollTimer = null;
+          this.resultUpdated = data.updated || 0;
+          this.resultErrors = data.errors || 0;
+          this.step = 'done';
+          this.syncing = false;
+        }
+      } catch (_) {}
+    },
+  }
+}
 </script>
 {% endblock %}
