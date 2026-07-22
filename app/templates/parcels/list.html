@@ -95,18 +95,30 @@
             <div class="text-3xl mb-1">✅</div>
             <h3 class="text-lg font-semibold text-gray-800">Синхронізацію завершено!</h3>
           </div>
-          <div class="grid grid-cols-3 gap-2 mb-4 text-center">
+          <div class="grid grid-cols-4 gap-2 mb-4 text-center">
             <div class="bg-green-50 rounded-lg p-2">
               <div class="text-xl font-bold text-green-700" x-text="resultUpdated"></div>
               <div class="text-xs text-green-600">Доставлено</div>
             </div>
             <div class="bg-gray-50 rounded-lg p-2">
-              <div class="text-xl font-bold text-gray-600" x-text="total - resultUpdated - resultErrors"></div>
+              <div class="text-xl font-bold text-gray-600" x-text="total - resultUpdated - resultErrors - resultNoData"></div>
               <div class="text-xs text-gray-500">В дорозі</div>
+            </div>
+            <div class="bg-amber-50 rounded-lg p-2">
+              <div class="text-xl font-bold text-amber-600" x-text="resultNoData"></div>
+              <div class="text-xs text-amber-500">Немає даних</div>
             </div>
             <div class="bg-red-50 rounded-lg p-2" x-show="resultErrors > 0">
               <div class="text-xl font-bold text-red-600" x-text="resultErrors"></div>
               <div class="text-xs text-red-500">Помилок</div>
+            </div>
+          </div>
+
+          <!-- No-data tracking numbers -->
+          <div x-show="noDataTNs.length > 0" class="mb-3">
+            <div class="text-xs font-medium text-amber-700 mb-1">Немає даних у UPS (старі або ще не відправлені):</div>
+            <div class="overflow-auto rounded border border-amber-200 bg-amber-50 p-2" style="max-height:100px">
+              <div class="text-xs font-mono text-amber-800 leading-5" x-text="noDataTNs.join(', ')"></div>
             </div>
           </div>
 
@@ -611,6 +623,8 @@ function upsBrowserSync() {
     processed: 0,
     resultUpdated: 0,
     resultErrors: 0,
+    resultNoData: 0,
+    noDataTNs: [],
     errorMsg: '',
     scriptUrl: window.location.origin + '/ups-sync/script.user.js',
     _pollTimer: null,
@@ -642,6 +656,8 @@ function upsBrowserSync() {
       this.errorMsg = '';
       this.parcels = [];
       this.keepaStatus = 'pending';
+      this.resultNoData = 0;
+      this.noDataTNs = [];
       localStorage.setItem('ups_tm_installed', '1');
 
       try {
@@ -681,8 +697,9 @@ function upsBrowserSync() {
         if (data.status === 'done') {
           clearInterval(this._pollTimer);
           this._pollTimer = null;
-          this.resultUpdated = data.updated || 0;
-          this.resultErrors  = data.errors  || 0;
+          this.resultUpdated = data.updated  || 0;
+          this.resultErrors  = data.errors   || 0;
+          this.resultNoData  = data.no_data  || 0;
           this.step = 'done';
           this.syncing = false;
           // load first report immediately, then poll for Keepa updates
@@ -701,6 +718,7 @@ function upsBrowserSync() {
         const data = await resp.json();
         this.parcels     = data.parcels     || [];
         this.keepaStatus = data.keepa_status || 'pending';
+        this.noDataTNs   = data.no_data     || [];
         if (this.keepaStatus === 'done' && this._reportTimer) {
           clearInterval(this._reportTimer);
           this._reportTimer = null;

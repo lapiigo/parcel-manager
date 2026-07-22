@@ -435,13 +435,17 @@ def receive_result(
     results: list[dict] = body.get("results") or []
     updated = 0
     errors = 0
+    no_data: list[str] = []       # TNs UPS has no record for (old/pre-shipment)
     need_keepa: list[dict] = []   # [{parcel_id, tn, asin}]
     delivered_parcels: list[dict] = []
 
     for item in results:
         tn = item.get("tracking_number", "")
         if item.get("error"):
-            errors += 1
+            if item["error"] == "no_response":
+                no_data.append(tn)
+            else:
+                errors += 1
             continue
 
         parcel = db.query(Parcel).filter(Parcel.tracking_number == tn).first()
@@ -487,6 +491,7 @@ def receive_result(
         session["processed"]        = len(results)
         session["updated"]          = updated
         session["errors"]           = errors
+        session["no_data"]          = no_data
         session["delivered_parcels"] = delivered_parcels
         if need_keepa:
             session["keepa_status"] = "running"
@@ -496,7 +501,7 @@ def receive_result(
     if need_keepa:
         background_tasks.add_task(_run_keepa, need_keepa, token)
 
-    return {"ok": True, "updated": updated, "errors": errors}
+    return {"ok": True, "updated": updated, "errors": errors, "no_data": len(no_data)}
 
 
 @router.get("/status")
@@ -511,6 +516,7 @@ def sync_status(token: str):
         "processed":    session["processed"],
         "updated":      session.get("updated", 0),
         "errors":       session.get("errors", 0),
+        "no_data":      len(session.get("no_data", [])),
         "keepa_status": session.get("keepa_status", "pending"),
     }
 
@@ -554,7 +560,11 @@ def sync_report(token: str):
             "error":           err_msg,
         })
 
-    return {"keepa_status": keepa_status, "parcels": parcels_out}
+    return {
+        "keepa_status": keepa_status,
+        "parcels":      parcels_out,
+        "no_data":      session.get("no_data", []),
+    }
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
