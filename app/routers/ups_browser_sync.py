@@ -147,8 +147,7 @@ function showBanner(text) {
     return el;
 }
 
-// UPS form requires one tracking number per line — NOT comma-separated.
-// NOTE: '\\n' in Python source = '\n' in JS = literal newline char (correct).
+// UPS form requires one tracking number per line, not comma-separated.
 function gotoTrackPage(tns) {
     var q = encodeURIComponent(tns.join('\\n'));
     window.location.replace('https://www.ups.com/track?trackNums=' + q);
