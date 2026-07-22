@@ -255,93 +255,106 @@ def parcel_list(
 
 @router.post("/sync-transit")
 def sync_transit(
+    background_tasks: BackgroundTasks,
     request: Request,
-    db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
     if not can(current_user, "edit_parcel"):
-        return RedirectResponse("/parcels?status=in_transit", status_code=302)  # keep status filter on access denied
+        return RedirectResponse("/parcels?status=in_transit", status_code=302)
 
-    from app.services.housecargo_service import sync_transit_updates as hc_sync_transit, HouseCargoError
-    from app.services.shipx_service import sync_transit_updates as sx_sync_transit, ShipXError
-    from app.services.crypto_service import decrypt
-
-    suppliers = (
-        db.query(Supplier)
-        .filter(Supplier.platform.in_(["housecargo", "shipx"]))
-        .all()
-    )
-
-    total_updated = 0
-    errors: list[str] = []
-
-    for supplier in suppliers:
-        try:
-            if supplier.platform == "housecargo":
-                # Use per-client credentials when available
-                from app.models.client import Client as ClientModel
-                hc_clients = (
-                    db.query(ClientModel)
-                    .filter(
-                        ClientModel.housecargo_supplier_id == supplier.id,
-                        ClientModel.housecargo_username.isnot(None),
-                        ClientModel.housecargo_password_encrypted.isnot(None),
-                    )
-                    .all()
-                )
-                if hc_clients:
-                    for hc_client in hc_clients:
-                        cli_pass = decrypt(hc_client.housecargo_password_encrypted)
-                        result = hc_sync_transit(
-                            supplier.id, hc_client.housecargo_username, cli_pass, db,
-                            client_id=hc_client.id
-                        )
-                        total_updated += result["updated"]
-                        errors.extend(result["errors"])
-                elif supplier.login_username and supplier.login_password_encrypted:
-                    password = decrypt(supplier.login_password_encrypted)
-                    result = hc_sync_transit(supplier.id, supplier.login_username, password, db)
-                    total_updated += result["updated"]
-                    errors.extend(result["errors"])
-            else:  # shipx
-                from app.models.client import Client as ClientModel
-                sx_clients = (
-                    db.query(ClientModel)
-                    .filter(
-                        ClientModel.shipx_supplier_id == supplier.id,
-                        ClientModel.shipx_username.isnot(None),
-                        ClientModel.shipx_password_encrypted.isnot(None),
-                    )
-                    .all()
-                )
-                if sx_clients:
-                    for sx_client in sx_clients:
-                        cli_pass = decrypt(sx_client.shipx_password_encrypted)
-                        result = sx_sync_transit(
-                            supplier.id, sx_client.shipx_username, cli_pass, db,
-                            client_id=sx_client.id
-                        )
-                        total_updated += result["updated"]
-                        errors.extend(result["errors"])
-                elif supplier.login_username and supplier.login_password_encrypted:
-                    password = decrypt(supplier.login_password_encrypted)
-                    result = sx_sync_transit(supplier.id, supplier.login_username, password, db)
-                    total_updated += result["updated"]
-                    errors.extend(result["errors"])
-        except (HouseCargoError, ShipXError) as exc:
-            errors.append(f"{supplier.name}: {exc}")
-        except Exception as exc:
-            errors.append(f"{supplier.name}: unexpected error — {exc}")
-
-    flash = f"Updated {total_updated} parcel(s) to Delivered."
-    if errors:
-        flash += f" Warnings: {'; '.join(errors[:3])}"
+    background_tasks.add_task(_run_transit_sync_bg)
 
     import urllib.parse
+    flash = "Sync started — result will arrive via Telegram"
     return RedirectResponse(
         f"/parcels?sync_flash={urllib.parse.quote(flash)}",
         status_code=302,
     )
+
+
+def _run_transit_sync_bg() -> None:
+    """Background task: sync ShipX/HouseCargo transit updates + Telegram report."""
+    import logging
+    from app.database import SessionLocal
+    from app.models.client import Client as ClientModel
+    from app.models.supplier import Supplier as SupplierModel
+    from app.services.crypto_service import decrypt
+    from app.services.housecargo_service import HouseCargoError, sync_transit_updates as hc_sync
+    from app.services.shipx_service import ShipXError, sync_transit_updates as sx_sync
+    from app.services.telegram_service import send_telegram_message
+
+    log = logging.getLogger("sync_transit")
+    db = SessionLocal()
+    total_updated = 0
+    errors: list[str] = []
+
+    try:
+        suppliers = (
+            db.query(SupplierModel)
+            .filter(SupplierModel.platform.in_(["housecargo", "shipx"]))
+            .all()
+        )
+
+        for supplier in suppliers:
+            try:
+                if supplier.platform == "housecargo":
+                    hc_clients = (
+                        db.query(ClientModel)
+                        .filter(
+                            ClientModel.housecargo_supplier_id == supplier.id,
+                            ClientModel.housecargo_username.isnot(None),
+                            ClientModel.housecargo_password_encrypted.isnot(None),
+                        )
+                        .all()
+                    )
+                    if hc_clients:
+                        for c in hc_clients:
+                            r = hc_sync(supplier.id, c.housecargo_username, decrypt(c.housecargo_password_encrypted), db, client_id=c.id)
+                            total_updated += r["updated"]
+                            errors.extend(r["errors"])
+                    elif supplier.login_username and supplier.login_password_encrypted:
+                        r = hc_sync(supplier.id, supplier.login_username, decrypt(supplier.login_password_encrypted), db)
+                        total_updated += r["updated"]
+                        errors.extend(r["errors"])
+                else:  # shipx
+                    sx_clients = (
+                        db.query(ClientModel)
+                        .filter(
+                            ClientModel.shipx_supplier_id == supplier.id,
+                            ClientModel.shipx_username.isnot(None),
+                            ClientModel.shipx_password_encrypted.isnot(None),
+                        )
+                        .all()
+                    )
+                    if sx_clients:
+                        for c in sx_clients:
+                            r = sx_sync(supplier.id, c.shipx_username, decrypt(c.shipx_password_encrypted), db, client_id=c.id)
+                            total_updated += r["updated"]
+                            errors.extend(r["errors"])
+                    elif supplier.login_username and supplier.login_password_encrypted:
+                        r = sx_sync(supplier.id, supplier.login_username, decrypt(supplier.login_password_encrypted), db)
+                        total_updated += r["updated"]
+                        errors.extend(r["errors"])
+
+            except (HouseCargoError, ShipXError) as exc:
+                errors.append(f"{supplier.name}: {exc}")
+                log.warning("Sync error %s: %s", supplier.name, exc)
+            except Exception as exc:
+                errors.append(f"{supplier.name}: {exc}")
+                log.exception("Sync unexpected error %s", supplier.name)
+
+    finally:
+        db.close()
+
+    lines = [f"🔄 <b>Sync завершено</b>", f"📦 Оновлено/імпортовано: {total_updated}"]
+    if errors:
+        lines.append(f"⚠️ Помилки ({len(errors)}):")
+        for e in errors[:5]:
+            lines.append(f"  • {e}")
+    try:
+        send_telegram_message("\n".join(lines))
+    except Exception as exc:
+        log.warning("Telegram send failed: %s", exc)
 
 
 @router.post("/night-sync")
