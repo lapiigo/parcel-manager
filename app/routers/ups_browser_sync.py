@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      3.4
+// @version      3.5
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -123,7 +123,7 @@ XMLHttpRequest.prototype.send = function (body) {
 };
 
 var SS = sessionStorage;
-var BATCH = 25;
+var BATCH = 5;  // UPS renders 5 tracking results per page; each batch = one page load
 
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
