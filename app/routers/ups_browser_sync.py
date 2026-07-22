@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      3.1
+// @version      3.2
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -77,10 +77,9 @@ _USERSCRIPT = """\
 // Capture hash BEFORE UPS SPA rewrites URL with history.replaceState
 var HASH = window.location.hash;
 
-// Intercept window.fetch at document-start, before any UPS scripts load.
-// Direct calls to UPS API return 403 (Akamai blocks userscript requests).
-// Solution: let UPS's own JS call GetStatus, and capture the response here.
+// Intercept both fetch AND XMLHttpRequest — UPS's Angular app uses XHR, not fetch.
 var captured = [];
+
 var _fetch = window.fetch.bind(window);
 window.fetch = function (input, init) {
     var url = typeof input === 'string' ? input : (input && input.url) || '';
@@ -88,12 +87,33 @@ window.fetch = function (input, init) {
         if (url.indexOf('GetStatus') >= 0) {
             resp.clone().json().then(function (d) {
                 var details = d.trackDetails || [];
-                console.log('[PM] Intercepted GetStatus:', details.length, 'items');
+                console.log('[PM] fetch GetStatus:', details.length, 'items');
                 details.forEach(function (x) { captured.push(x); });
             }).catch(function () {});
         }
         return resp;
     });
+};
+
+var _xhrOpen = XMLHttpRequest.prototype.open;
+var _xhrSend = XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.open = function (method, url) {
+    this._pmUrl = url || '';
+    return _xhrOpen.apply(this, arguments);
+};
+XMLHttpRequest.prototype.send = function (body) {
+    if (this._pmUrl.indexOf('GetStatus') >= 0) {
+        var xhr = this;
+        xhr.addEventListener('load', function () {
+            try {
+                var d = JSON.parse(xhr.responseText);
+                var details = d.trackDetails || [];
+                console.log('[PM] XHR GetStatus:', details.length, 'items');
+                details.forEach(function (x) { captured.push(x); });
+            } catch (e) {}
+        });
+    }
+    return _xhrSend.apply(this, arguments);
 };
 
 var SS = sessionStorage;
