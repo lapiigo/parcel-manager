@@ -13,10 +13,10 @@ Flow:
   → JS opens www.ups.com/track?__pm_token=TOKEN&__pm_server=http://ourserver
   → Tampermonkey script runs, reads TOKEN and server URL from URL params
   → Script fetches list of tracking numbers from /ups-sync/pending?token=TOKEN
-  → Script calls UPS API one-by-one, posts progress
+  → Script calls UPS API in batches of 25 (UPS max per request), random 1-2 s delay
   → Script posts all results to /ups-sync/result?token=TOKEN
   → Script closes tab
-  → Admin page polls /ups-sync/status?token=TOKEN and shows progress
+  → Admin page polls /ups-sync/status?token=TOKEN (progress) then /ups-sync/report (per-parcel detail)
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      1.2
+// @version      1.3
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -104,6 +104,7 @@ _USERSCRIPT = """\
     }
 
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+    function randomDelay() { return Math.random() * 1000 + 1000; }  // 1-2 s
 
     function getXsrf() {
         for (const c of document.cookie.split(';')) {
@@ -129,11 +130,11 @@ _USERSCRIPT = """\
     await sleep(2000);
 
     const results = [];
-    const DELAY = 350;   // ms between requests (~2.8 req/sec)
+    const BATCH_SIZE = 25;   // UPS allows up to 25 tracking numbers per request
 
-    // ── 3. query UPS one-by-one ───────────────────────────────────────────────
-    for (let i = 0; i < trackingNumbers.length; i++) {
-        const tn = trackingNumbers[i];
+    // ── 3. query UPS in batches of 25 ────────────────────────────────────────
+    for (let i = 0; i < trackingNumbers.length; i += BATCH_SIZE) {
+        const batch = trackingNumbers.slice(i, i + BATCH_SIZE);
         try {
             const xsrf = getXsrf();
             const resp = await fetch(
@@ -145,31 +146,46 @@ _USERSCRIPT = """\
                         'X-XSRF-TOKEN': xsrf,
                         'X-Requested-With': 'XMLHttpRequest',
                     },
-                    body: JSON.stringify({ Locale: 'en_US', TrackingNumber: [tn] }),
+                    body: JSON.stringify({ Locale: 'en_US', TrackingNumber: batch }),
                 }
             );
             const data = await resp.json();
-            const details = (data.trackDetails || [])[0] || {};
-            const status  = (details.packageStatus || '').trim();
-            const delivered = status.toLowerCase().includes('delivered');
+            const details = data.trackDetails || [];
 
-            results.push({
-                tracking_number: tn,
-                delivered,
-                delivered_at:  delivered ? (details.deliveredDate || '') : '',
-                delivered_time: delivered ? (details.deliveredTime || '') : '',
-                gmt_offset:    details.gmtOffset || '',
-                status,
-            });
+            for (const detail of details) {
+                // Map by trackingNumber field in response (not by array index)
+                const tn = (detail.trackingNumber || '').trim();
+                if (!tn) continue;
+                const status = (detail.packageStatus || '').trim();
+                const delivered = status.toLowerCase().includes('delivered');
+
+                results.push({
+                    tracking_number: tn,
+                    delivered,
+                    delivered_at:   delivered ? (detail.deliveredDate  || '') : '',
+                    delivered_time: delivered ? (detail.deliveredTime  || '') : '',
+                    gmt_offset:     detail.gmtOffset || '',
+                    status,
+                });
+            }
 
             // send incremental progress
-            gmPost(`${pmServer}/ups-sync/progress?token=${pmToken}`, { processed: i + 1 });
+            gmPost(`${pmServer}/ups-sync/progress?token=${pmToken}`, {
+                processed: Math.min(i + BATCH_SIZE, trackingNumbers.length)
+            });
+
         } catch (err) {
-            console.error('[PM Sync] Error for', tn, err);
-            results.push({ tracking_number: tn, error: String(err) });
+            console.error('[PM Sync] Batch error at index', i, err);
+            // Mark each TN in the batch as an error so the server knows
+            for (const tn of batch) {
+                results.push({ tracking_number: tn, error: String(err) });
+            }
         }
 
-        await sleep(DELAY);
+        // Random delay between batches to avoid rate limiting
+        if (i + BATCH_SIZE < trackingNumbers.length) {
+            await sleep(randomDelay());
+        }
     }
 
     // ── 4. send all results ───────────────────────────────────────────────────
@@ -216,22 +232,27 @@ def start_sync(
     token = str(uuid.uuid4())
     with _lock:
         _sessions[token] = {
-            "created_at": datetime.now(timezone.utc),
+            "created_at":       datetime.now(timezone.utc),
             "tracking_numbers": tracking_numbers,
-            "total": len(tracking_numbers),
-            "processed": 0,
-            "status": "running",
-            "updated": 0,
-            "errors": 0,
+            "total":            len(tracking_numbers),
+            "processed":        0,
+            "status":           "running",
+            "updated":          0,
+            "errors":           0,
+            # per-parcel detail (filled by /result + _run_keepa)
+            "delivered_parcels": [],  # [{tn, parcel_id, asin, arrived_at}]
+            "keepa_results":     {},  # {tn: {status, price, error}}
+            "keepa_status":      "pending",  # pending | running | done
         }
 
+    base = str(request.base_url).rstrip("/")
     return {
-        "token": token,
-        "count": len(tracking_numbers),
+        "token":   token,
+        "count":   len(tracking_numbers),
         "ups_url": (
             f"https://www.ups.com/track?trackNums=1ZDUMMY"
             f"&__pm_token={token}"
-            f"&__pm_server={request.base_url}".rstrip("/")
+            f"&__pm_server={base}"
         ),
     }
 
@@ -264,7 +285,8 @@ def receive_result(
 ):
     """
     Receive full tracking results from Tampermonkey.
-    Updates parcel statuses synchronously, queues Keepa in background.
+    Updates parcel statuses synchronously; only newly-delivered parcels with
+    an ASIN are queued for Keepa price lookup.
     """
     session = _get_session(token)
     if not session:
@@ -273,7 +295,8 @@ def receive_result(
     results: list[dict] = body.get("results") or []
     updated = 0
     errors = 0
-    need_keepa: list[int] = []
+    need_keepa: list[dict] = []   # [{parcel_id, tn, asin}]
+    delivered_parcels: list[dict] = []
 
     for item in results:
         tn = item.get("tracking_number", "")
@@ -295,7 +318,6 @@ def receive_result(
         )
         if ok:
             updated += 1
-            # Parse delivered_at with GMT offset
             delivered_at = _parse_delivered_at(
                 item.get("delivered_at", ""),
                 item.get("delivered_time", ""),
@@ -304,17 +326,35 @@ def receive_result(
             if delivered_at:
                 parcel.arrived_at = delivered_at
                 db.commit()
+
+            arrived_str = delivered_at.strftime("%d.%m %H:%M") if delivered_at else None
+            delivered_parcels.append({
+                "tn":        tn,
+                "parcel_id": parcel.id,
+                "asin":      parcel.asin or "",
+                "arrived_at": arrived_str,
+            })
+
             if parcel.asin:
-                need_keepa.append(parcel.id)
+                need_keepa.append({
+                    "parcel_id": parcel.id,
+                    "tn":        tn,
+                    "asin":      parcel.asin,
+                })
 
     with _lock:
-        session["status"] = "done"
-        session["processed"] = len(results)
-        session["updated"] = updated
-        session["errors"] = errors
+        session["status"]           = "done"
+        session["processed"]        = len(results)
+        session["updated"]          = updated
+        session["errors"]           = errors
+        session["delivered_parcels"] = delivered_parcels
+        if need_keepa:
+            session["keepa_status"] = "running"
+        else:
+            session["keepa_status"] = "done"
 
     if need_keepa:
-        background_tasks.add_task(_run_keepa, need_keepa)
+        background_tasks.add_task(_run_keepa, need_keepa, token)
 
     return {"ok": True, "updated": updated, "errors": errors}
 
@@ -326,18 +366,60 @@ def sync_status(token: str):
     if not session:
         return {"status": "not_found"}
     return {
-        "status":    session["status"],
-        "total":     session["total"],
-        "processed": session["processed"],
-        "updated":   session.get("updated", 0),
-        "errors":    session.get("errors", 0),
+        "status":       session["status"],
+        "total":        session["total"],
+        "processed":    session["processed"],
+        "updated":      session.get("updated", 0),
+        "errors":       session.get("errors", 0),
+        "keepa_status": session.get("keepa_status", "pending"),
     }
+
+
+@router.get("/report")
+def sync_report(token: str):
+    """
+    Per-parcel report: which parcels were delivered and their Keepa price status.
+    Polled by the frontend every 4 s until keepa_status == 'done'.
+    """
+    session = _get_session(token)
+    if not session:
+        return {"keepa_status": "not_found", "parcels": []}
+
+    keepa_results: dict = session.get("keepa_results", {})
+    keepa_status: str   = session.get("keepa_status", "pending")
+
+    parcels_out = []
+    for dp in session.get("delivered_parcels", []):
+        tn = dp["tn"]
+        kr = keepa_results.get(tn)
+        if kr:
+            keepa_cell = kr["status"]    # "ok" | "error" | "no_asin"
+            price      = kr.get("price")
+            err_msg    = kr.get("error")
+        elif not dp["asin"]:
+            keepa_cell = "no_asin"
+            price      = None
+            err_msg    = None
+        else:
+            keepa_cell = "pending"
+            price      = None
+            err_msg    = None
+
+        parcels_out.append({
+            "tracking_number": tn,
+            "arrived_at":      dp.get("arrived_at"),
+            "asin":            dp.get("asin") or "",
+            "keepa":           keepa_cell,
+            "price":           price,
+            "error":           err_msg,
+        })
+
+    return {"keepa_status": keepa_status, "parcels": parcels_out}
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _parse_delivered_at(date_str: str, time_str: str, gmt_offset: str) -> Optional[datetime]:
-    from datetime import timedelta, timezone
     combined = f"{date_str} {time_str}".strip()
     parsed = None
     for fmt in ("%m/%d/%Y %I:%M %p", "%m/%d/%Y %H:%M", "%m/%d/%Y",
@@ -350,7 +432,6 @@ def _parse_delivered_at(date_str: str, time_str: str, gmt_offset: str) -> Option
             continue
     if parsed is None:
         return None
-    # Apply gmtOffset if provided
     offset = _parse_offset(gmt_offset)
     if offset is not None:
         return parsed.replace(tzinfo=timezone(offset)).astimezone(timezone.utc).replace(tzinfo=None)
@@ -373,22 +454,41 @@ def _parse_offset(s: str) -> Optional[timedelta]:
     return None
 
 
-def _run_keepa(parcel_ids: list[int]) -> None:
-    """Background task: update Keepa prices for newly delivered parcels."""
-    from app.database import SessionLocal
+def _run_keepa(items: list[dict], token: str) -> None:
+    """
+    Background task: update Keepa prices only for parcels newly marked delivered.
+    `items` = [{parcel_id, tn, asin}]  — only parcels that transitioned this sync.
+    Updates _sessions[token]['keepa_results'] as each parcel is processed.
+    """
+    import logging
     import time
+
+    from app.database import SessionLocal
+    from app.services.keepa_service import KeepaError
+
+    log = logging.getLogger("ups_browser_sync.keepa")
     db = SessionLocal()
+
     try:
-        for pid in parcel_ids:
-            if not keepa_service.has_tokens():
+        for item in items:
+            pid = item["parcel_id"]
+            tn  = item["tn"]
+
+            # Wait for tokens if exhausted
+            while not keepa_service.has_tokens():
+                log.info("Keepa tokens exhausted, sleeping 5 min before %s", tn)
                 time.sleep(300)
+
             parcel = db.query(Parcel).filter(Parcel.id == pid).first()
             if not parcel or not parcel.asin:
+                _set_keepa_result(token, tn, "no_asin", None, None)
                 continue
+
             try:
-                coeff = (parcel.client.cost_coefficient or 0.45) if parcel.client else 0.45
-                dt = parcel.arrived_at or datetime.utcnow()
+                coeff  = (parcel.client.cost_coefficient or 0.45) if parcel.client else 0.45
+                dt     = parcel.arrived_at or datetime.utcnow()
                 result = keepa_service.get_product_info(parcel.asin, dt, multiplier=coeff)
+
                 if result.amazon_price is not None:
                     parcel.amazon_price = result.amazon_price
                 if result.cost is not None:
@@ -396,8 +496,28 @@ def _run_keepa(parcel_ids: list[int]) -> None:
                 if result.title and not parcel.title:
                     parcel.title = result.title
                 db.commit()
+
+                price = float(parcel.amazon_price) if parcel.amazon_price is not None else None
+                _set_keepa_result(token, tn, "ok", price, None)
+                log.info("Keepa OK %s → $%s", tn, price)
+
+            except KeepaError as exc:
+                _set_keepa_result(token, tn, "error", None, str(exc))
+                log.warning("Keepa error %s: %s", tn, exc)
             except Exception as exc:
-                import logging
-                logging.getLogger("ups_browser_sync").warning("Keepa error %s: %s", parcel.asin, exc)
+                _set_keepa_result(token, tn, "error", None, str(exc))
+                log.warning("Keepa unexpected %s: %s", tn, exc)
+
     finally:
         db.close()
+        session = _get_session(token)
+        if session is not None:
+            with _lock:
+                session["keepa_status"] = "done"
+
+
+def _set_keepa_result(token: str, tn: str, status: str, price: Optional[float], error: Optional[str]) -> None:
+    session = _get_session(token)
+    if session is not None:
+        with _lock:
+            session["keepa_results"][tn] = {"status": status, "price": price, "error": error}
