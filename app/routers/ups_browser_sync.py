@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      2.1
+// @version      3.0
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -71,206 +71,223 @@ _USERSCRIPT = """\
 // @run-at       document-start
 // ==/UserScript==
 
-// ── Step 1 (document-start): intercept window.fetch before UPS scripts run ──
-// When UPS navigates to ?trackNums=..., their own JS calls GetStatus.
-// Akamai allows that call (it comes from UPS's code). We capture the response.
-const _PM_CAPTURED = [];  // trackDetails from all intercepted UPS API calls
-const _origFetch = window.fetch.bind(window);
-window.fetch = async function(input, init) {
-    const url = typeof input === 'string' ? input : (input && input.url) || '';
-    const r = await _origFetch(input, init);
-    if (url.includes('GetStatus')) {
-        try {
-            const data = await r.clone().json();
-            const details = data.trackDetails || [];
-            console.log('[PM Sync] Intercepted UPS API call →', details.length, 'results');
-            _PM_CAPTURED.push(...details);
-        } catch (e) { /* not JSON or wrong shape */ }
-    }
-    return r;
+(function () {
+'use strict';
+
+// Capture hash BEFORE UPS SPA rewrites URL with history.replaceState
+var HASH = window.location.hash;
+
+// Intercept window.fetch at document-start, before any UPS scripts load.
+// Direct calls to UPS API return 403 (Akamai blocks userscript requests).
+// Solution: let UPS's own JS call GetStatus, and capture the response here.
+var captured = [];
+var _fetch = window.fetch.bind(window);
+window.fetch = function (input, init) {
+    var url = typeof input === 'string' ? input : (input && input.url) || '';
+    return _fetch(input, init).then(function (resp) {
+        if (url.indexOf('GetStatus') >= 0) {
+            resp.clone().json().then(function (d) {
+                var details = d.trackDetails || [];
+                console.log('[PM] Intercepted GetStatus:', details.length, 'items');
+                details.forEach(function (x) { captured.push(x); });
+            }).catch(function () {});
+        }
+        return resp;
+    });
 };
 
-// Capture hash before UPS SPA clears it via history.replaceState
-const _PM_HASH = window.location.hash;
+var SS = sessionStorage;
+var BATCH = 25;
 
-(async function () {
-    'use strict';
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
-    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-    const SS = sessionStorage;
-
-    function gmPost(url, body) {
-        return new Promise((res, rej) => GM_xmlhttpRequest({
-            method: 'POST', url, data: JSON.stringify(body),
-            headers: { 'Content-Type': 'application/json' },
-            onload: res, onerror: rej,
-        }));
-    }
-
-    function showBanner(text) {
-        let b = document.getElementById('__pm_banner');
-        if (!b) {
-            b = document.createElement('div');
-            b.id = '__pm_banner';
-            b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999999;' +
-                'background:#f59e0b;color:#1c1917;font-weight:600;font-size:14px;' +
-                'text-align:center;padding:10px;font-family:sans-serif;';
-            (document.body || document.documentElement).prepend(b);
-        }
-        b.textContent = text;
-    }
-
-    // Wait for DOM before touching document.body
-    await new Promise(r => {
-        if (document.readyState !== 'loading') r();
-        else document.addEventListener('DOMContentLoaded', r, { once: true });
+function gmGet(url) {
+    return new Promise(function (ok, fail) {
+        GM_xmlhttpRequest({
+            method: 'GET', url: url,
+            onload: function (r) {
+                try { ok(JSON.parse(r.responseText)); } catch (e) { fail(e); }
+            },
+            onerror: fail,
+        });
     });
+}
 
-    // ── Phase A: Initial call (hash has pm_token) ────────────────────────────
-    const hashParams = new URLSearchParams(_PM_HASH.replace(/^#/, ''));
-    const hashToken  = hashParams.get('pm_token');
-    const hashServer = hashParams.get('pm_server');
+function gmPost(url, body) {
+    return new Promise(function (ok, fail) {
+        GM_xmlhttpRequest({
+            method: 'POST', url: url,
+            data: JSON.stringify(body),
+            headers: { 'Content-Type': 'application/json' },
+            onload: ok, onerror: fail,
+        });
+    });
+}
 
-    if (hashToken && hashServer) {
-        console.log('[PM Sync] Phase A — fetching TN list, token:', hashToken);
-        showBanner('⏳ Parcel Manager: завантаження трек-номерів…');
+function showBanner(text) {
+    var el = document.getElementById('__pm');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = '__pm';
+        el.style.position = 'fixed';
+        el.style.top = '0';
+        el.style.left = '0';
+        el.style.right = '0';
+        el.style.zIndex = '999999';
+        el.style.background = '#f59e0b';
+        el.style.color = '#1c1917';
+        el.style.fontWeight = '600';
+        el.style.fontSize = '14px';
+        el.style.textAlign = 'center';
+        el.style.padding = '10px';
+        el.style.fontFamily = 'sans-serif';
+        document.body.prepend(el);
+    }
+    el.textContent = text;
+    return el;
+}
 
-        let allTNs;
+// UPS form requires one tracking number per line — NOT comma-separated.
+// NOTE: '\\n' in Python source = '\n' in JS = literal newline char (correct).
+function gotoTrackPage(tns) {
+    var q = encodeURIComponent(tns.join('\\n'));
+    window.location.replace('https://www.ups.com/track?trackNums=' + q);
+}
+
+async function waitCapture(ms) {
+    var end = Date.now() + ms;
+    while (captured.length === 0 && Date.now() < end) { await sleep(300); }
+    return captured.length > 0;
+}
+
+async function clickTrack() {
+    var end = Date.now() + 6000;
+    while (Date.now() < end) {
+        var btns = document.querySelectorAll('button');
+        for (var i = 0; i < btns.length; i++) {
+            var txt = (btns[i].textContent || '').trim();
+            if (/^track$/i.test(txt)) {
+                console.log('[PM] Clicking Track button');
+                btns[i].click();
+                return true;
+            }
+        }
+        await sleep(300);
+    }
+    console.warn('[PM] Track button not found in 6s');
+    return false;
+}
+
+async function main() {
+    if (document.readyState === 'loading') {
+        await new Promise(function (r) {
+            document.addEventListener('DOMContentLoaded', r, { once: true });
+        });
+    }
+
+    var params  = new URLSearchParams(HASH.replace(/^#/, ''));
+    var hToken  = params.get('pm_token');
+    var hServer = params.get('pm_server');
+
+    // ── Phase A: First load — hash has pm_token ──────────────────────────────
+    if (hToken && hServer) {
+        console.log('[PM] Phase A, token:', hToken);
+        showBanner('Parcel Manager: завантаження трек-номерів…');
+        var data;
         try {
-            allTNs = await new Promise((res, rej) => GM_xmlhttpRequest({
-                method: 'GET', url: `${hashServer}/ups-sync/pending?token=${hashToken}`,
-                onload: r => { try { res(JSON.parse(r.responseText).tracking_numbers || []); } catch(e) { rej(e); } },
-                onerror: rej,
-            }));
+            data = await gmGet(hServer + '/ups-sync/pending?token=' + hToken);
         } catch (e) {
-            console.error('[PM Sync] Failed to fetch TN list:', e);
-            showBanner('❌ Parcel Manager: помилка завантаження трек-номерів');
+            showBanner('Parcel Manager: помилка завантаження — ' + String(e));
             return;
         }
-
-        console.log('[PM Sync] Got', allTNs.length, 'TNs');
-        SS.setItem('__pm_token',   hashToken);
-        SS.setItem('__pm_server',  hashServer);
-        SS.setItem('__pm_tns',     JSON.stringify(allTNs));
-        SS.setItem('__pm_results', '[]');
-        SS.setItem('__pm_batch',   '0');
-
-        // Navigate to first batch — UPS expects newline-separated tracking numbers
-        const first = allTNs.slice(0, 25).join('\n');
-        window.location.replace('https://www.ups.com/track?trackNums=' + encodeURIComponent(first));
-        return;  // page reloads; script continues from Phase B
-    }
-
-    // ── Phase B: Continuation (no hash, state in sessionStorage) ────────────
-    const pmToken  = SS.getItem('__pm_token');
-    const pmServer = SS.getItem('__pm_server');
-    if (!pmToken || !pmServer) return;  // not our page
-
-    const allTNs   = JSON.parse(SS.getItem('__pm_tns')     || '[]');
-    let   results  = JSON.parse(SS.getItem('__pm_results')  || '[]');
-    const batchIdx = parseInt(SS.getItem('__pm_batch') || '0', 10);
-    const BATCH    = 25;
-    const total    = Math.ceil(allTNs.length / BATCH);
-
-    console.log('[PM Sync] Phase B — batch', batchIdx + 1, 'of', total);
-    showBanner(`⏳ Parcel Manager: партія ${batchIdx + 1}/${total}…`);
-
-    // Wait for UPS's own GetStatus call to be intercepted (up to 20s)
-    const deadline = Date.now() + 20000;
-    while (_PM_CAPTURED.length === 0 && Date.now() < deadline) {
-        await sleep(400);
-    }
-
-    if (_PM_CAPTURED.length === 0) {
-        // UPS pre-fills the form from ?trackNums= but doesn't auto-submit.
-        // Find and click the "Track" button so UPS's own JS makes the API call.
-        console.log('[PM Sync] UPS did not auto-call GetStatus — clicking Track button');
-        const clicked = (() => {
-            // Log all buttons for debugging
-            const btns = Array.from(document.querySelectorAll('button'));
-            console.log('[PM Sync] Buttons on page:', btns.map(b => JSON.stringify(b.textContent.trim())).join(', '));
-            // Try text match first
-            for (const b of btns) {
-                if (/^track/i.test(b.textContent.trim())) {
-                    console.log('[PM Sync] Clicking button:', b.textContent.trim());
-                    b.click();
-                    return true;
-                }
-            }
-            // Try attribute selectors
-            for (const sel of ['[data-id*="rack"]','[aria-label*="rack"]','[class*="trackBtn"]','[class*="track-btn"]','[type="submit"]']) {
-                const el = document.querySelector(sel);
-                if (el) { console.log('[PM Sync] Clicking:', sel); el.click(); return true; }
-            }
-            return false;
-        })();
-
-        if (clicked) {
-            // Wait again for the GetStatus call triggered by button click
-            const d2 = Date.now() + 15000;
-            while (_PM_CAPTURED.length === 0 && Date.now() < d2) await sleep(400);
-        }
-
-        if (_PM_CAPTURED.length === 0) {
-            console.warn('[PM Sync] Still no GetStatus call after button click');
-            showBanner('⚠️ UPS не зробив запит — перевір у Network чи є виклик GetStatus');
-            await sleep(20000);
-        }
-    } else {
-        console.log('[PM Sync] Captured', _PM_CAPTURED.length, 'results for batch', batchIdx + 1);
-    }
-
-    // Build result map by tracking number
-    const byTN = {};
-    for (const d of _PM_CAPTURED) {
-        const tn = (d.trackingNumber || '').trim();
-        if (tn) byTN[tn] = d;
-    }
-
-    const batch = allTNs.slice(batchIdx * BATCH, (batchIdx + 1) * BATCH);
-    for (const tn of batch) {
-        const d       = byTN[tn] || {};
-        const status  = (d.packageStatus || '').trim();
-        const delivered = status.toLowerCase().includes('delivered');
-        results.push({
-            tracking_number: tn,
-            delivered,
-            delivered_at:   delivered ? (d.deliveredDate || '') : '',
-            delivered_time: delivered ? (d.deliveredTime || '') : '',
-            gmt_offset:     d.gmtOffset || '',
-            status,
-            error:          byTN[tn] ? undefined : 'no_response',
-        });
-        if (delivered) console.log('[PM Sync] DELIVERED:', tn, status);
-    }
-
-    SS.setItem('__pm_results', JSON.stringify(results));
-
-    const nextIdx = batchIdx + 1;
-    if (nextIdx < total) {
-        // Navigate to next batch
-        SS.setItem('__pm_batch', String(nextIdx));
-        const next = allTNs.slice(nextIdx * BATCH, (nextIdx + 1) * BATCH).join('\n');
-        console.log('[PM Sync] Going to batch', nextIdx + 1);
-        window.location.replace('https://www.ups.com/track?trackNums=' + encodeURIComponent(next));
+        var tns = data.tracking_numbers || [];
+        console.log('[PM] Got', tns.length, 'TNs');
+        SS.setItem('__pm_tok', hToken);
+        SS.setItem('__pm_srv', hServer);
+        SS.setItem('__pm_tns', JSON.stringify(tns));
+        SS.setItem('__pm_res', '[]');
+        SS.setItem('__pm_idx', '0');
+        gotoTrackPage(tns.slice(0, BATCH));
         return;
     }
 
-    // ── All batches done ─────────────────────────────────────────────────────
-    ['__pm_token','__pm_server','__pm_tns','__pm_results','__pm_batch']
-        .forEach(k => SS.removeItem(k));
+    // ── Phase B: Continuation — state in sessionStorage ──────────────────────
+    var token  = SS.getItem('__pm_tok');
+    var server = SS.getItem('__pm_srv');
+    if (!token || !server) return;
 
-    console.log('[PM Sync] All done —', results.length, 'results, posting to server');
+    var allTNs = JSON.parse(SS.getItem('__pm_tns') || '[]');
+    var results = JSON.parse(SS.getItem('__pm_res') || '[]');
+    var idx    = parseInt(SS.getItem('__pm_idx') || '0', 10);
+    var total  = Math.ceil(allTNs.length / BATCH);
+
+    console.log('[PM] Phase B: batch', idx + 1, 'of', total);
+    var bEl = showBanner('⏳ Parcel Manager: партія ' + (idx + 1) + '/' + total + '…');
+
+    // Wait for UPS to auto-call GetStatus (triggered by ?trackNums= in URL)
+    var got = await waitCapture(8000);
+    if (!got) {
+        await clickTrack();
+        got = await waitCapture(12000);
+    }
+    if (!got) {
+        bEl.textContent = '⚠️ UPS не відповів на GetStatus. Закриття через 20с…';
+        await sleep(20000);
+        window.close();
+        return;
+    }
+
+    // Map captured details by tracking number
+    var byTN = {};
+    captured.forEach(function (d) {
+        var tn = (d.trackingNumber || '').trim();
+        if (tn) byTN[tn] = d;
+    });
+    console.log('[PM] Mapped', Object.keys(byTN).length, 'unique results');
+
+    var batch = allTNs.slice(idx * BATCH, (idx + 1) * BATCH);
+    batch.forEach(function (tn) {
+        var d         = byTN[tn] || {};
+        var status    = (d.packageStatus || '').trim();
+        var delivered = status.toLowerCase().indexOf('delivered') >= 0;
+        var row = {
+            tracking_number: tn,
+            delivered:       delivered,
+            delivered_at:    delivered ? (d.deliveredDate  || '') : '',
+            delivered_time:  delivered ? (d.deliveredTime  || '') : '',
+            gmt_offset:      d.gmtOffset || '',
+            status:          status,
+        };
+        if (!byTN[tn]) row.error = 'no_response';
+        results.push(row);
+        if (delivered) console.log('[PM] DELIVERED:', tn, status);
+    });
+
+    SS.setItem('__pm_res', JSON.stringify(results));
+
+    var next = idx + 1;
+    if (next < total) {
+        SS.setItem('__pm_idx', String(next));
+        gotoTrackPage(allTNs.slice(next * BATCH, (next + 1) * BATCH));
+        return;
+    }
+
+    // ── All done ─────────────────────────────────────────────────────────────
+    ['__pm_tok','__pm_srv','__pm_tns','__pm_res','__pm_idx'].forEach(function (k) { SS.removeItem(k); });
+    console.log('[PM] Complete:', results.length, 'results');
     try {
-        await gmPost(`${pmServer}/ups-sync/result?token=${pmToken}`, { results });
-        showBanner('✅ Parcel Manager: синхронізацію завершено, закриваємо…');
-        await sleep(800);
+        await gmPost(server + '/ups-sync/result?token=' + token, { results: results });
+        bEl.textContent = '✅ Parcel Manager: синхронізацію завершено!';
+        await sleep(1000);
     } catch (e) {
-        console.error('[PM Sync] Failed to post results:', e);
-        showBanner('⚠️ Parcel Manager: помилка відправки результатів. Закриття через 20 с…');
+        bEl.textContent = '⚠️ Parcel Manager: помилка відправки — ' + String(e);
         await sleep(20000);
     }
     window.close();
+}
+
+main().catch(function (e) { console.error('[PM] Fatal error:', e); });
+
 })();
 """
 
