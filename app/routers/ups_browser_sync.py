@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      1.6
+// @version      1.7
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -154,14 +154,17 @@ console.log('[PM Sync] document-start, hash captured:', _PM_HASH);
     // ── 2. wait for UPS cookies (page may still be loading) ──────────────────
     await sleep(2000);
 
+    const xsrf = getXsrf();
+    console.log('[PM Sync] XSRF token found:', xsrf ? xsrf.slice(0, 10) + '…' : '(EMPTY — requests may fail)');
+
     const results = [];
+    let hadErrors = false;
     const BATCH_SIZE = 25;   // UPS allows up to 25 tracking numbers per request
 
     // ── 3. query UPS in batches of 25 ────────────────────────────────────────
     for (let i = 0; i < trackingNumbers.length; i += BATCH_SIZE) {
         const batch = trackingNumbers.slice(i, i + BATCH_SIZE);
         try {
-            const xsrf = getXsrf();
             const resp = await fetch(
                 'https://www.ups.com/track/api/Track/GetStatus?loc=en_US',
                 {
@@ -174,8 +177,19 @@ console.log('[PM Sync] document-start, hash captured:', _PM_HASH);
                     body: JSON.stringify({ Locale: 'en_US', TrackingNumber: batch }),
                 }
             );
+
+            if (!resp.ok) {
+                const txt = await resp.text();
+                console.error('[PM Sync] UPS API HTTP', resp.status, txt.slice(0, 300));
+                hadErrors = true;
+                for (const tn of batch) results.push({ tracking_number: tn, error: `HTTP ${resp.status}` });
+                continue;
+            }
+
             const data = await resp.json();
+            console.log('[PM Sync] Batch', i/BATCH_SIZE + 1, '— raw keys:', Object.keys(data));
             const details = data.trackDetails || [];
+            console.log('[PM Sync] trackDetails count:', details.length, '| first keys:', details[0] ? Object.keys(details[0]).join(', ') : 'none');
 
             for (const detail of details) {
                 // Map by trackingNumber field in response (not by array index)
@@ -192,6 +206,8 @@ console.log('[PM Sync] document-start, hash captured:', _PM_HASH);
                     gmt_offset:     detail.gmtOffset || '',
                     status,
                 });
+
+                if (delivered) console.log('[PM Sync] DELIVERED:', tn, status);
             }
 
             // send incremental progress
@@ -201,10 +217,8 @@ console.log('[PM Sync] document-start, hash captured:', _PM_HASH);
 
         } catch (err) {
             console.error('[PM Sync] Batch error at index', i, err);
-            // Mark each TN in the batch as an error so the server knows
-            for (const tn of batch) {
-                results.push({ tracking_number: tn, error: String(err) });
-            }
+            hadErrors = true;
+            for (const tn of batch) results.push({ tracking_number: tn, error: String(err) });
         }
 
         // Random delay between batches to avoid rate limiting
@@ -219,11 +233,18 @@ console.log('[PM Sync] document-start, hash captured:', _PM_HASH);
         console.log('[PM Sync] Done, closing tab');
     } catch (e) {
         console.error('[PM Sync] Failed to send results:', e);
+        hadErrors = true;
     }
 
     const b = document.getElementById('__pm_sync_banner');
-    if (b) b.textContent = '✅ Parcel Manager: синхронізацію завершено, закриваємо…';
-    await new Promise(r => setTimeout(r, 800));
+    if (hadErrors) {
+        if (b) b.textContent = '⚠️ Parcel Manager: були помилки — перевір Console (F12). Закриття через 30 с…';
+        console.warn('[PM Sync] There were errors — tab will stay open 30s for inspection');
+        await sleep(30000);
+    } else {
+        if (b) b.textContent = '✅ Parcel Manager: синхронізацію завершено, закриваємо…';
+        await sleep(800);
+    }
     window.close();
 })();
 """
