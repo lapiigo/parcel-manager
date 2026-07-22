@@ -151,7 +151,6 @@ def parcel_list(
     q: str = Query(""),
     unpaid: str = Query(""),
     report: str = Query(""),
-    sync_flash: str = Query(""),
     client_filter: str = Query(""),
     supplier_filter: str = Query(""),
     date_from: str = Query(""),
@@ -242,7 +241,6 @@ def parcel_list(
             "supplier_filter": supplier_filter,
             "date_from": date_from,
             "date_to": date_to,
-            "sync_flash": sync_flash,
             "STATUS_LABELS": STATUS_LABELS,
             "STATUS_COLORS": STATUS_COLORS,
             "clients": clients,
@@ -251,131 +249,6 @@ def parcel_list(
             "can": can,
         },
     )
-
-
-@router.post("/sync-transit")
-def sync_transit(
-    background_tasks: BackgroundTasks,
-    request: Request,
-    current_user=Depends(require_manager_up),
-):
-    if not can(current_user, "edit_parcel"):
-        return RedirectResponse("/parcels?status=in_transit", status_code=302)
-
-    background_tasks.add_task(_run_transit_sync_bg)
-
-    import urllib.parse
-    flash = "Sync started — result will arrive via Telegram"
-    return RedirectResponse(
-        f"/parcels?sync_flash={urllib.parse.quote(flash)}",
-        status_code=302,
-    )
-
-
-def _run_transit_sync_bg() -> None:
-    """Background task: sync ShipX/HouseCargo transit updates + Telegram report."""
-    import logging
-    from app.database import SessionLocal
-    from app.models.client import Client as ClientModel
-    from app.models.supplier import Supplier as SupplierModel
-    from app.services.crypto_service import decrypt
-    from app.services.housecargo_service import HouseCargoError, sync_transit_updates as hc_sync
-    from app.services.shipx_service import ShipXError, sync_transit_updates as sx_sync
-    from app.services.telegram_service import send_telegram_message
-
-    log = logging.getLogger("sync_transit")
-    db = SessionLocal()
-    total_updated = 0
-    errors: list[str] = []
-
-    try:
-        suppliers = (
-            db.query(SupplierModel)
-            .filter(SupplierModel.platform.in_(["housecargo", "shipx"]))
-            .all()
-        )
-
-        for supplier in suppliers:
-            try:
-                if supplier.platform == "housecargo":
-                    hc_clients = (
-                        db.query(ClientModel)
-                        .filter(
-                            ClientModel.housecargo_supplier_id == supplier.id,
-                            ClientModel.housecargo_username.isnot(None),
-                            ClientModel.housecargo_password_encrypted.isnot(None),
-                        )
-                        .all()
-                    )
-                    if hc_clients:
-                        for c in hc_clients:
-                            r = hc_sync(supplier.id, c.housecargo_username, decrypt(c.housecargo_password_encrypted), db, client_id=c.id)
-                            total_updated += r["updated"]
-                            errors.extend(r["errors"])
-                    elif supplier.login_username and supplier.login_password_encrypted:
-                        r = hc_sync(supplier.id, supplier.login_username, decrypt(supplier.login_password_encrypted), db)
-                        total_updated += r["updated"]
-                        errors.extend(r["errors"])
-                else:  # shipx
-                    sx_clients = (
-                        db.query(ClientModel)
-                        .filter(
-                            ClientModel.shipx_supplier_id == supplier.id,
-                            ClientModel.shipx_username.isnot(None),
-                            ClientModel.shipx_password_encrypted.isnot(None),
-                        )
-                        .all()
-                    )
-                    if sx_clients:
-                        for c in sx_clients:
-                            r = sx_sync(supplier.id, c.shipx_username, decrypt(c.shipx_password_encrypted), db, client_id=c.id)
-                            total_updated += r["updated"]
-                            errors.extend(r["errors"])
-                    elif supplier.login_username and supplier.login_password_encrypted:
-                        r = sx_sync(supplier.id, supplier.login_username, decrypt(supplier.login_password_encrypted), db)
-                        total_updated += r["updated"]
-                        errors.extend(r["errors"])
-
-            except (HouseCargoError, ShipXError) as exc:
-                errors.append(f"{supplier.name}: {exc}")
-                log.warning("Sync error %s: %s", supplier.name, exc)
-            except Exception as exc:
-                errors.append(f"{supplier.name}: {exc}")
-                log.exception("Sync unexpected error %s", supplier.name)
-
-    finally:
-        db.close()
-
-    lines = [f"🔄 <b>Sync завершено</b>", f"📦 Оновлено/імпортовано: {total_updated}"]
-    if errors:
-        lines.append(f"⚠️ Помилки ({len(errors)}):")
-        for e in errors[:5]:
-            lines.append(f"  • {e}")
-    try:
-        send_telegram_message("\n".join(lines))
-    except Exception as exc:
-        log.warning("Telegram send failed: %s", exc)
-
-
-@router.post("/night-sync")
-async def night_sync(
-    background_tasks: BackgroundTasks,
-    request: Request,
-):
-    """
-    Trigger nightly UPS sync + Keepa price update.
-    Protected by X-Night-Sync-Key header (set NIGHT_SYNC_KEY in .env).
-    Called by systemd timer at 02:00 UTC.
-    """
-    from fastapi import HTTPException
-    expected = os.getenv("NIGHT_SYNC_KEY", "")
-    provided = request.headers.get("X-Night-Sync-Key", "")
-    if not expected or provided != expected:
-        raise HTTPException(status_code=403, detail="Invalid or missing X-Night-Sync-Key")
-
-    from app.services.night_sync_service import run_night_sync
-    background_tasks.add_task(run_night_sync)
-    return {"status": "started", "message": "Night sync running in background"}
 
 
 @router.post("/bulk")
@@ -937,7 +810,9 @@ def parcel_calculate_cost(
         errors.append("Delivery date not set. Run Sync or set it manually in Edit.")
     else:
         try:
-            result = keepa_service.get_product_info(parcel.asin, parcel.arrived_at)
+            client_obj = db.query(Client).filter(Client.id == parcel.client_id).first() if parcel.client_id else None
+            coeff = (client_obj.cost_coefficient if client_obj and client_obj.cost_coefficient is not None else 0.45)
+            result = keepa_service.get_product_info(parcel.asin, parcel.arrived_at, multiplier=coeff)
             if result.title and not parcel.title:
                 parcel.title = result.title
             if result.cost is None:
@@ -946,7 +821,7 @@ def parcel_calculate_cost(
                 parcel.amazon_price = result.amazon_price
                 parcel.purchase_price = result.cost
                 db.commit()
-                info.append(f"Cost = ${result.amazon_price:.2f} × 0.45 = ${result.cost} (ASIN {parcel.asin}, {parcel.arrived_at.strftime('%d.%m.%Y')})")
+                info.append(f"Cost = ${result.amazon_price:.2f} × {coeff} = ${result.cost} (ASIN {parcel.asin}, {parcel.arrived_at.strftime('%d.%m.%Y')})")
         except keepa_service.KeepaError as exc:
             errors.append(f"Keepa error: {exc}")
 
@@ -1036,7 +911,9 @@ def parcel_accept(
 
     if parcel.asin and parcel.arrived_at:
         try:
-            result = keepa_service.get_product_info(parcel.asin, parcel.arrived_at)
+            client_obj = db.query(Client).filter(Client.id == parcel.client_id).first() if parcel.client_id else None
+            coeff = (client_obj.cost_coefficient if client_obj and client_obj.cost_coefficient is not None else 0.45)
+            result = keepa_service.get_product_info(parcel.asin, parcel.arrived_at, multiplier=coeff)
             if result.title:
                 parcel.title = result.title
             if result.cost is not None:
@@ -1398,18 +1275,29 @@ def parcel_admin_respond(
         manual_price = None
 
     if action == "approved":
+        eff_discount = discount_val if discount_val is not None else parcel.client_discount_proposed
         if manual_price is not None:
             parcel.purchase_price = round(manual_price, 2)
-        elif discount_val is not None and parcel.amazon_price:
-            parcel.purchase_price = round(parcel.amazon_price * discount_val / 100, 2)
+        elif eff_discount is not None:
+            if not parcel.amazon_price and parcel.asin and parcel.arrived_at:
+                try:
+                    r = keepa_service.get_product_info(parcel.asin, parcel.arrived_at, multiplier=1.0)
+                    if r.amazon_price:
+                        parcel.amazon_price = r.amazon_price
+                    if r.title and not parcel.title:
+                        parcel.title = r.title
+                except keepa_service.KeepaError:
+                    pass
+            if parcel.amazon_price:
+                parcel.purchase_price = round(parcel.amazon_price * eff_discount / 100, 2)
         db.add(ParcelNegotiation(
             parcel_id=parcel_id, round_number=round_num, actor="admin",
-            action="approved", discount_proposed=discount_val,
+            action="approved", discount_proposed=eff_discount,
             notes=notes.strip() or None,
         ))
         transition_parcel(parcel, "ready_to_pay", db, changed_by=actor_name,
                           notes="Admin approved negotiation")
-        cost_info = f"manual ${parcel.purchase_price}" if manual_price is not None else (f"at {discount_val}% of buybox = ${parcel.purchase_price}" if discount_val else "")
+        cost_info = f"manual ${parcel.purchase_price}" if manual_price is not None else (f"at {eff_discount}% of buybox = ${parcel.purchase_price}" if eff_discount else "")
         _log(db, parcel_id, "admin_approved_negotiation",
              f"Approved" + (f" {cost_info}" if cost_info else ""),
              user=current_user)

@@ -319,15 +319,15 @@
           <div x-show="!['very_damaged','wrong_item_return',''].includes(action)" x-cloak
                class="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-3">
             <div>
-              <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate (% of buy box)</label>
+              <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate (% of Amazon NEW)</label>
               <div class="flex items-center gap-3 flex-wrap">
                 <input type="number" name="discount" :value="pct" x-model="pct"
                        min="1" max="100" step="0.5"
                        class="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm font-semibold text-center focus:outline-none focus:ring-2 focus:ring-indigo-400" />
-                <span class="text-sm text-gray-500">% of buy box</span>
+                <span class="text-sm text-gray-500">% of Amazon NEW</span>
                 {% if parcel.amazon_price %}
                 <span class="text-xs text-gray-400 bg-white border border-gray-200 px-2 py-1 rounded">
-                  Buy box: <strong>${{ "%.2f"|format(parcel.amazon_price) }}</strong>
+                  Amazon NEW: <strong>${{ "%.2f"|format(parcel.amazon_price) }}</strong>
                 </span>
                 {% endif %}
               </div>
@@ -336,7 +336,7 @@
                 Cost = $<span x-text="calcCost || '?'"></span>
               </p>
               {% else %}
-              <p class="text-xs text-gray-400 mt-1.5" x-show="!priceOverride">Buy box will be fetched from Keepa at save.</p>
+              <p class="text-xs text-gray-400 mt-1.5" x-show="!priceOverride">Amazon NEW price will be fetched from Keepa at save.</p>
               {% endif %}
             </div>
             <div class="border-t border-gray-200 pt-3">
@@ -439,7 +439,7 @@
         {% set action_labels = {'accepted':'All OK','overstock':'Overstock','damaged':'Damaged','very_damaged':'Very Damaged','wrong_item_accept':'Wrong Item — Accept','wrong_item_discount':'Wrong Item — Accept w/ Discount','wrong_item_return':'Wrong Item — Return'} %}
         {{ action_labels.get(parcel.client_action, parcel.client_action) }}
       </p>
-      {% if parcel.client_discount_proposed is not none %}<p class="text-sm text-gray-600">Requested discount: <strong>{{ parcel.client_discount_proposed }}%</strong></p>{% endif %}
+      {% if parcel.client_discount_proposed is not none %}<p class="text-sm text-gray-600">Requested rate: <strong>{{ parcel.client_discount_proposed }}% of Amazon NEW</strong></p>{% endif %}
       {% if parcel.client_notes %}<p class="text-sm text-gray-600 mt-1">{{ parcel.client_notes }}</p>{% endif %}
     </div>
     {% endif %}
@@ -453,7 +453,7 @@
             <span class="text-xs text-gray-400">R{{ r.round_number }}</span>
           </div>
           <p class="text-xs font-medium text-gray-800">{% if r.action == 'approved' %}✅ Approved{% elif r.action == 'counter_offer' %}↩️ Counter Offer{% elif r.action == 'approve_return' %}📦 Return Approved{% elif r.action == 'accepted' %}✅ Client Accepted{% else %}{{ r.action }}{% endif %}</p>
-          {% if r.discount_proposed is not none %}<p class="text-xs text-gray-600">Rate: {{ r.discount_proposed }}% of buy box{% if parcel.amazon_price %} = ${{ "%.2f"|format(parcel.amazon_price * r.discount_proposed / 100) }}{% endif %}</p>{% endif %}
+          {% if r.discount_proposed is not none %}<p class="text-xs text-gray-600">Rate: {{ r.discount_proposed }}% of Amazon NEW{% if parcel.amazon_price %} = ${{ "%.2f"|format(parcel.amazon_price * r.discount_proposed / 100) }}{% endif %}</p>{% endif %}
           {% if r.notes %}<p class="text-xs text-gray-500 mt-0.5">{{ r.notes }}</p>{% endif %}
         </div>
       </div>
@@ -490,18 +490,18 @@
         <!-- Rate field for approve / counter_offer -->
         <div x-show="action !== 'approve_return'" class="bg-gray-50 rounded-xl p-4 border border-gray-200 space-y-3">
           <div>
-            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate (% of buy box)</label>
+            <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Rate (% of Amazon NEW)</label>
             <div class="flex items-center gap-3 flex-wrap">
               <input type="number" name="discount" :value="pct" x-model="pct"
                      min="1" max="100" step="0.5"
                      class="w-24 border border-gray-300 rounded-lg px-3 py-2 text-sm font-semibold text-center focus:outline-none focus:ring-2 focus:ring-indigo-400" />
               <span class="text-sm text-gray-500">%</span>
-              {% if parcel.amazon_price %}<span class="text-xs text-gray-400">Buy box: <strong>${{ "%.2f"|format(parcel.amazon_price) }}</strong></span>{% endif %}
+              {% if parcel.amazon_price %}<span class="text-xs text-gray-400">Amazon NEW: <strong>${{ "%.2f"|format(parcel.amazon_price) }}</strong></span>{% endif %}
             </div>
             {% if parcel.amazon_price %}
             <p class="text-xs text-indigo-600 mt-1.5 font-medium" x-show="!negPriceOverride">Cost = $<span x-text="calcCost || '?'"></span></p>
             {% else %}
-            <p class="text-xs text-gray-400 mt-1.5" x-show="!negPriceOverride">Buy box will be fetched from Keepa.</p>
+            <p class="text-xs text-gray-400 mt-1.5" x-show="!negPriceOverride">Amazon NEW price will be fetched from Keepa.</p>
             {% endif %}
             {% if ns.last_client_pct %}
             <p class="text-xs text-amber-600 mt-1">Client proposed: <strong>{{ ns.last_client_pct }}%</strong>{% if parcel.amazon_price %} = ${{ "%.2f"|format(parcel.amazon_price * ns.last_client_pct / 100) }}{% endif %}</p>

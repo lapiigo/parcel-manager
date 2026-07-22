@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Form, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -29,14 +29,26 @@ def supplier_list(
     request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
+    synced: str = Query(""),
+    sync_error: str = Query(""),
 ):
     if not can(current_user, "view_suppliers"):
         return RedirectResponse("/dashboard", status_code=302)
     suppliers = db.query(Supplier).order_by(Supplier.name).all()
+    synced_name = None
+    if synced:
+        s = db.query(Supplier).filter(Supplier.id == int(synced)).first()
+        synced_name = s.name if s else None
     return templates.TemplateResponse(
         request,
         "suppliers/list.html",
-        context={"current_user": current_user, "suppliers": suppliers, "can": can},
+        context={
+            "current_user": current_user,
+            "suppliers": suppliers,
+            "can": can,
+            "synced_name": synced_name,
+            "sync_error": sync_error,
+        },
     )
 
 
@@ -134,33 +146,23 @@ def supplier_edit(
     return RedirectResponse("/suppliers", status_code=302)
 
 
-@router.post("/{supplier_id}/sync")
-def supplier_sync(
-    request: Request,
-    supplier_id: int,
-    db: Session = Depends(get_db),
-    current_user=Depends(require_manager_up),
-):
-    supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
-    if not supplier:
-        return RedirectResponse("/suppliers", status_code=302)
+def _run_supplier_sync_bg(supplier_id: int) -> None:
+    """Background task: sync ShipX/HouseCargo orders and send Telegram report."""
+    import logging
+    from app.database import SessionLocal
+    from app.models.client import Client as ClientModel
+    from app.services.telegram_service import send_telegram_message
 
-    if supplier.platform not in ("housecargo", "shipx"):
-        return templates.TemplateResponse(
-            request,
-            "suppliers/sync_result.html",
-            context={
-                "current_user": current_user,
-                "supplier": supplier,
-                "can": can,
-                "error": "Auto-sync is not supported for this platform.",
-                "result": None,
-            },
-        )
-
+    log = logging.getLogger("supplier_sync")
+    db = SessionLocal()
     try:
+        supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
+        if not supplier:
+            return
+
+        result = {"created": 0, "updated": 0, "skipped": 0, "errors": []}
+
         if supplier.platform == "housecargo":
-            from app.models.client import Client as ClientModel
             hc_clients = (
                 db.query(ClientModel)
                 .filter(
@@ -171,12 +173,11 @@ def supplier_sync(
                 .all()
             )
             if hc_clients:
-                result = {"created": 0, "updated": 0, "skipped": 0, "errors": []}
                 for hc_client in hc_clients:
                     cli_pass = decrypt(hc_client.housecargo_password_encrypted)
                     r = housecargo_service.sync(
                         supplier.id, hc_client.housecargo_username, cli_pass, db,
-                        client_id=hc_client.id
+                        client_id=hc_client.id,
                     )
                     for k in ("created", "updated", "skipped"):
                         result[k] += r[k]
@@ -184,50 +185,77 @@ def supplier_sync(
             elif supplier.login_username and supplier.login_password_encrypted:
                 password = decrypt(supplier.login_password_encrypted)
                 result = housecargo_service.sync(supplier.id, supplier.login_username, password, db)
-            else:
-                return templates.TemplateResponse(
-                    request, "suppliers/sync_result.html",
-                    context={"current_user": current_user, "supplier": supplier, "can": can,
-                             "error": "No HouseCargo credentials configured. Add credentials on each client's detail page.", "result": None},
-                )
+
         elif supplier.platform == "shipx":
-            if not supplier.login_username or not supplier.login_password_encrypted:
-                return templates.TemplateResponse(
-                    request, "suppliers/sync_result.html",
-                    context={"current_user": current_user, "supplier": supplier, "can": can,
-                             "error": "Credentials are not configured for this supplier.", "result": None},
-                )
             password = decrypt(supplier.login_password_encrypted)
             result = shipx_service.sync(supplier.id, supplier.login_username, password, db)
-        else:
-            result = None
-            error = "Auto-sync is not supported for this platform."
-            return templates.TemplateResponse(
-                request,
-                "suppliers/sync_result.html",
-                context={
-                    "current_user": current_user,
-                    "supplier": supplier,
-                    "can": can,
-                    "error": error,
-                    "result": None,
-                },
-            )
-        error = None
-    except (housecargo_service.HouseCargoError, shipx_service.ShipXError) as exc:
-        result = None
-        error = str(exc)
 
-    return templates.TemplateResponse(
-        request,
-        "suppliers/sync_result.html",
-        context={
-            "current_user": current_user,
-            "supplier": supplier,
-            "can": can,
-            "error": error,
-            "result": result,
-        },
+        lines = [
+            f"📦 <b>Sync: {supplier.name}</b>",
+            f"✅ Створено: {result['created']}",
+            f"🔄 Оновлено: {result['updated']}",
+            f"⏭ Пропущено: {result['skipped']}",
+        ]
+        if result["errors"]:
+            lines.append(f"⚠️ Помилки ({len(result['errors'])}):")
+            for e in result["errors"][:5]:
+                lines.append(f"  • {e}")
+        send_telegram_message("\n".join(lines))
+
+    except Exception as exc:
+        log.exception("Supplier sync error (supplier_id=%d): %s", supplier_id, exc)
+        try:
+            send_telegram_message(f"❌ Sync помилка ({supplier_id}): {exc}")
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+@router.post("/{supplier_id}/sync")
+def supplier_sync(
+    request: Request,
+    supplier_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
+    if not supplier:
+        return RedirectResponse("/suppliers", status_code=302)
+
+    if supplier.platform == "housecargo":
+        from app.models.client import Client as ClientModel
+        has_creds = (
+            supplier.login_username
+            or db.query(ClientModel)
+            .filter(
+                ClientModel.housecargo_supplier_id == supplier.id,
+                ClientModel.housecargo_username.isnot(None),
+            )
+            .first()
+        )
+        if not has_creds:
+            return RedirectResponse(
+                f"/suppliers?sync_error=No+HouseCargo+credentials+configured",
+                status_code=302,
+            )
+    elif supplier.platform == "shipx":
+        if not supplier.login_username or not supplier.login_password_encrypted:
+            return RedirectResponse(
+                f"/suppliers?sync_error=ShipX+credentials+not+configured",
+                status_code=302,
+            )
+    else:
+        return RedirectResponse(
+            f"/suppliers?sync_error=Auto-sync+not+supported+for+this+platform",
+            status_code=302,
+        )
+
+    background_tasks.add_task(_run_supplier_sync_bg, supplier_id)
+    return RedirectResponse(
+        f"/suppliers?synced={supplier_id}",
+        status_code=302,
     )
 
 

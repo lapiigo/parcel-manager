@@ -11,6 +11,16 @@
 {% endblock %}
 
 {% block content %}
+{% if synced_name %}
+<div class="mb-4 px-4 py-2.5 bg-blue-50 border border-blue-100 rounded-xl flex items-center gap-2 text-sm text-blue-800">
+  Sync запущено для <strong>{{ synced_name }}</strong> — результат прийде в Telegram.
+</div>
+{% endif %}
+{% if sync_error %}
+<div class="mb-4 px-4 py-2.5 bg-red-50 border border-red-100 rounded-xl flex items-center gap-2 text-sm text-red-800">
+  {{ sync_error }}
+</div>
+{% endif %}
 <div class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 text-xs uppercase text-gray-500 font-semibold tracking-wide">

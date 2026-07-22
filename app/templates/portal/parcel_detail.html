@@ -149,7 +149,7 @@
         <div class="bg-gray-50 rounded-lg px-4 py-3 text-sm text-gray-600">
           Track <span class="font-semibold text-gray-800" x-text="'#' + trackId"></span>
           <span x-show="trackAsin" x-cloak> · ASIN <span class="font-mono font-semibold text-gray-800" x-text="trackAsin"></span></span>
-          <span x-show="trackAmazonPrice > 0" x-cloak> · Buy box: <strong x-text="'$' + trackAmazonPrice.toFixed(2)"></strong></span>
+          <span x-show="trackAmazonPrice > 0" x-cloak> · Amazon NEW: <strong x-text="'$' + trackAmazonPrice.toFixed(2)"></strong></span>
         </div>
 
         <!-- Action selection -->
@@ -246,7 +246,7 @@
 
           <!-- Rate % field for discount proposals -->
           <div x-show="showPct" x-cloak>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Your proposed rate (% of buy box)</label>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Your proposed rate (% of Amazon NEW)</label>
             <div class="flex items-center gap-2 flex-wrap">
               <input type="number" name="discount" x-model="pct" min="1" max="100" step="0.5"
                      class="w-28 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
@@ -255,10 +255,10 @@
                 <span class="text-sm font-semibold text-gray-800">= $<span x-text="calcCost"></span></span>
               </template>
               <template x-if="!calcCost">
-                <span class="text-xs text-gray-400">(buy box price not yet available)</span>
+                <span class="text-xs text-gray-400">(Amazon NEW price not yet available)</span>
               </template>
             </div>
-            <p class="text-xs text-gray-400 mt-1">Your standard rate: <strong>{{ client_pct }}%</strong> of buy box</p>
+            <p class="text-xs text-gray-400 mt-1">Your standard rate: <strong>{{ client_pct }}%</strong> of Amazon NEW</p>
           </div>
 
           <!-- Return notice -->
@@ -323,7 +323,7 @@
             {% else %}{{ CLIENT_ACTION_LABELS.get(round.action, round.action) }}{% endif %}
           </p>
           {% if round.discount_proposed is not none %}
-          <p class="text-sm text-gray-600">Rate: <strong>{{ round.discount_proposed }}% of buy box</strong>
+          <p class="text-sm text-gray-600">Rate: <strong>{{ round.discount_proposed }}% of Amazon NEW</strong>
             {% if parcel.amazon_price %}<span class="text-gray-400"> = ${{ "%.2f"|format(parcel.amazon_price * round.discount_proposed / 100) }}</span>{% endif %}
           </p>
           {% endif %}
@@ -354,11 +354,11 @@
         <form method="post" action="/portal/parcels/{{ parcel.id }}/negotiate" class="space-y-3 mt-3">
           <input type="hidden" name="action" value="counter_offer" />
           <div>
-            <label class="block text-xs font-medium text-gray-600 mb-1">Your rate (% of buy box)</label>
+            <label class="block text-xs font-medium text-gray-600 mb-1">Your rate (% of Amazon NEW)</label>
             <div class="flex items-center gap-2 flex-wrap">
               <input type="number" name="discount" value="{{ client_pct }}" min="1" max="100" step="0.5"
                      class="w-28 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
-              {% if parcel.amazon_price %}<span class="text-xs text-gray-400">Buy box: ${{ "%.2f"|format(parcel.amazon_price) }}</span>{% endif %}
+              {% if parcel.amazon_price %}<span class="text-xs text-gray-400">Amazon NEW: ${{ "%.2f"|format(parcel.amazon_price) }}</span>{% endif %}
             </div>
           </div>
           <div>
@@ -389,7 +389,7 @@
       {% if parcel.client_discount_proposed is not none %}
       <div class="flex gap-2">
         <dt class="text-gray-400 w-28 shrink-0">Proposed rate</dt>
-        <dd class="font-medium text-gray-700">{{ parcel.client_discount_proposed }}% of buy box</dd>
+        <dd class="font-medium text-gray-700">{{ parcel.client_discount_proposed }}% of Amazon NEW</dd>
       </div>
       {% endif %}
       {% if parcel.client_notes %}

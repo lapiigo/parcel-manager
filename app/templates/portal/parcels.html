@@ -222,7 +222,7 @@
           {% if first.purchase_price is not none %}
           <span class="text-sm font-semibold text-gray-800">${{ "%.2f"|format(first.purchase_price) }}</span>
           {% elif first.amazon_price %}
-          <span class="text-xs text-gray-400">Buy box ${{ "%.2f"|format(first.amazon_price) }}</span>
+          <span class="text-xs text-gray-400">Amazon NEW ${{ "%.2f"|format(first.amazon_price) }}</span>
           {% endif %}
 
           {% if has_delivered %}
