@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      2.0
+// @version      2.1
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -155,8 +155,8 @@ const _PM_HASH = window.location.hash;
         SS.setItem('__pm_results', '[]');
         SS.setItem('__pm_batch',   '0');
 
-        // Navigate to first batch — UPS's JS will auto-call GetStatus for these TNs
-        const first = allTNs.slice(0, 25).join(',');
+        // Navigate to first batch — UPS expects newline-separated tracking numbers
+        const first = allTNs.slice(0, 25).join('\n');
         window.location.replace('https://www.ups.com/track?trackNums=' + encodeURIComponent(first));
         return;  // page reloads; script continues from Phase B
     }
@@ -250,7 +250,7 @@ const _PM_HASH = window.location.hash;
     if (nextIdx < total) {
         // Navigate to next batch
         SS.setItem('__pm_batch', String(nextIdx));
-        const next = allTNs.slice(nextIdx * BATCH, (nextIdx + 1) * BATCH).join(',');
+        const next = allTNs.slice(nextIdx * BATCH, (nextIdx + 1) * BATCH).join('\n');
         console.log('[PM Sync] Going to batch', nextIdx + 1);
         window.location.replace('https://www.ups.com/track?trackNums=' + encodeURIComponent(next));
         return;
