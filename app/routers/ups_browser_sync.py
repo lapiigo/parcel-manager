@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      1.4
+// @version      1.5
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -74,14 +74,31 @@ _USERSCRIPT = """\
 (async function () {
     'use strict';
 
+    console.log('[PM Sync] script loaded, hash:', window.location.hash);
+
     // Params are passed via URL hash (#pm_token=...&pm_server=...)
     // so UPS's SPA doesn't strip them when processing the query string.
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     const pmToken  = hashParams.get('pm_token');
     const pmServer = hashParams.get('pm_server');
-    if (!pmToken || !pmServer) return;   // normal UPS page, not our sync
+    if (!pmToken || !pmServer) {
+        console.log('[PM Sync] no pm_token/pm_server in hash — normal UPS page, exiting');
+        return;
+    }
 
     console.log('[PM Sync] Starting UPS sync, token:', pmToken);
+
+    // Show a visible banner so the user knows the script is running
+    const banner = document.createElement('div');
+    banner.id = '__pm_sync_banner';
+    banner.style.cssText = [
+        'position:fixed', 'top:0', 'left:0', 'right:0', 'z-index:999999',
+        'background:#f59e0b', 'color:#1c1917', 'font-weight:600',
+        'font-size:14px', 'text-align:center', 'padding:10px',
+        'font-family:sans-serif',
+    ].join(';');
+    banner.textContent = '⏳ Parcel Manager: синхронізація UPS…';
+    document.body ? document.body.prepend(banner) : document.addEventListener('DOMContentLoaded', () => document.body.prepend(banner));
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -198,6 +215,9 @@ _USERSCRIPT = """\
         console.error('[PM Sync] Failed to send results:', e);
     }
 
+    const b = document.getElementById('__pm_sync_banner');
+    if (b) b.textContent = '✅ Parcel Manager: синхронізацію завершено, закриваємо…';
+    await new Promise(r => setTimeout(r, 800));
     window.close();
 })();
 """
