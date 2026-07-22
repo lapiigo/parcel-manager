@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      1.9
+// @version      2.0
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -182,9 +182,40 @@ const _PM_HASH = window.location.hash;
     }
 
     if (_PM_CAPTURED.length === 0) {
-        console.warn('[PM Sync] Timeout — UPS did not call GetStatus for this batch');
-        showBanner('⚠️ UPS не зробив запит — перевір у Network чи є виклик GetStatus');
-        await sleep(15000);
+        // UPS pre-fills the form from ?trackNums= but doesn't auto-submit.
+        // Find and click the "Track" button so UPS's own JS makes the API call.
+        console.log('[PM Sync] UPS did not auto-call GetStatus — clicking Track button');
+        const clicked = (() => {
+            // Log all buttons for debugging
+            const btns = Array.from(document.querySelectorAll('button'));
+            console.log('[PM Sync] Buttons on page:', btns.map(b => JSON.stringify(b.textContent.trim())).join(', '));
+            // Try text match first
+            for (const b of btns) {
+                if (/^track/i.test(b.textContent.trim())) {
+                    console.log('[PM Sync] Clicking button:', b.textContent.trim());
+                    b.click();
+                    return true;
+                }
+            }
+            // Try attribute selectors
+            for (const sel of ['[data-id*="rack"]','[aria-label*="rack"]','[class*="trackBtn"]','[class*="track-btn"]','[type="submit"]']) {
+                const el = document.querySelector(sel);
+                if (el) { console.log('[PM Sync] Clicking:', sel); el.click(); return true; }
+            }
+            return false;
+        })();
+
+        if (clicked) {
+            // Wait again for the GetStatus call triggered by button click
+            const d2 = Date.now() + 15000;
+            while (_PM_CAPTURED.length === 0 && Date.now() < d2) await sleep(400);
+        }
+
+        if (_PM_CAPTURED.length === 0) {
+            console.warn('[PM Sync] Still no GetStatus call after button click');
+            showBanner('⚠️ UPS не зробив запит — перевір у Network чи є виклик GetStatus');
+            await sleep(20000);
+        }
     } else {
         console.log('[PM Sync] Captured', _PM_CAPTURED.length, 'results for batch', batchIdx + 1);
     }
