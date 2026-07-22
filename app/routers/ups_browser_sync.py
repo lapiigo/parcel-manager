@@ -63,7 +63,7 @@ _USERSCRIPT = """\
 // ==UserScript==
 // @name         Parcel Manager — UPS Sync
 // @namespace    https://github.com/lapiigo/parcel-manager
-// @version      3.3
+// @version      3.4
 // @description  Syncs UPS delivery status to Parcel Manager (opened automatically)
 // @author       Parcel Manager
 // @match        https://www.ups.com/track*
@@ -102,17 +102,23 @@ XMLHttpRequest.prototype.open = function (method, url) {
     return _xhrOpen.apply(this, arguments);
 };
 XMLHttpRequest.prototype.send = function (body) {
-    if (this._pmUrl.indexOf('GetStatus') >= 0) {
-        var xhr = this;
-        xhr.addEventListener('load', function () {
-            try {
-                var d = JSON.parse(xhr.responseText);
-                var details = d.trackDetails || [];
-                console.log('[PM] XHR GetStatus:', details.length, 'items');
-                details.forEach(function (x) { captured.push(x); });
-            } catch (e) {}
-        });
+    var xhr = this;
+    var url = xhr._pmUrl || '';
+    // Log all non-trivial XHR URLs to identify the tracking API endpoint
+    if (url && url.indexOf('ups.com') >= 0 && url.indexOf('tealium') < 0 && url.indexOf('analytics') < 0) {
+        console.log('[PM] XHR:', url.split('?')[0]);
     }
+    xhr.addEventListener('load', function () {
+        try {
+            var d = JSON.parse(xhr.responseText);
+            // Capture any response that looks like tracking data
+            var details = d.trackDetails || [];
+            if (details.length > 0) {
+                console.log('[PM] XHR tracking data from', url.split('?')[0], ':', details.length, 'items');
+                details.forEach(function (x) { captured.push(x); });
+            }
+        } catch (e) {}
+    });
     return _xhrSend.apply(this, arguments);
 };
 
