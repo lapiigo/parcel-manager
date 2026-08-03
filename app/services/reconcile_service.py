@@ -180,16 +180,18 @@ def _parse(data: bytes, filename: str, is_prep: bool) -> _Parsed:
             if t:
                 result.titles[asin] = str(t).strip()
 
+        # Cost is per-unit on both sides (prep = 1 row per unit; my file = per-1pc),
+        # so the line total is cost × qty.
         if track:
             key = (track, asin)
             result.tracked_qty[key] += qty
             if cost is not None:
-                result.tracked_cost[key] += cost
+                result.tracked_cost[key] += cost * qty
                 result.has_cost[key] = True
         else:
             result.untracked_qty[asin] += qty
             if cost is not None:
-                result.untracked_cost[asin] += cost
+                result.untracked_cost[asin] += cost * qty
                 result.has_cost[("", asin)] = True
 
     return result
@@ -280,7 +282,7 @@ def reconcile(my_bytes: bytes, my_name: str,
 # ── Template file for the user's "my list" upload ─────────────────────────────
 
 def build_template_xlsx() -> bytes:
-    """Minimal xlsx: tracking / asin / qty / cost (total cost for the line)."""
+    """Minimal xlsx: tracking / asin / qty / cost (cost per 1 unit)."""
     import openpyxl
     from openpyxl.styles import Font, PatternFill
 
@@ -295,9 +297,10 @@ def build_template_xlsx() -> bytes:
         c.font = Font(bold=True, color="FFFFFF")
         c.fill = fill
 
+    # cost is PER 1 UNIT — the line total is cost × qty
     examples = [
         ["1Z14V49E0337961675", "B0BYFJD8XX", 1, 434.75],
-        ["1Z7R65990303240359", "B09J99GVXX", 4, 107.69],
+        ["1Z7R65990303240359", "B09J99GVXX", 4, 57.28],
         ["", "B00V525TXX", 1, 18.18],  # no tracking (return) — matched by ASIN
     ]
     for r in examples:
