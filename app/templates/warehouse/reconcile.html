@@ -17,6 +17,21 @@
   <span class="text-xs px-2 py-0.5 rounded-full font-semibold {{ meta[1] }}">{{ meta[0] }}</span>
 {% endmacro %}
 
+{% set comments = comments|default({}) %}
+
+{% macro comment_cell(run_id, key, cm) %}
+  <td id="{{ key|replace('|','-') }}" class="px-4 py-2 align-top">
+    <form method="post" action="/warehouse/reconcile/{{ run_id }}/comment" class="flex items-center gap-1">
+      <input type="hidden" name="row_key" value="{{ key }}" />
+      <input type="text" name="comment" value="{{ cm.comment if cm else '' }}"
+             placeholder="коментар…"
+             class="w-44 border {% if cm %}border-indigo-200 bg-indigo-50/40{% else %}border-gray-200{% endif %} rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-400" />
+      <button type="submit" title="Зберегти" class="text-indigo-500 hover:text-indigo-700 text-sm px-1">✓</button>
+    </form>
+    {% if cm and cm.user_name %}<div class="text-[10px] text-gray-400 mt-0.5">{{ cm.user_name }}</div>{% endif %}
+  </td>
+{% endmacro %}
+
 <!-- Upload form -->
 <form method="post" action="/warehouse/reconcile" enctype="multipart/form-data"
       class="bg-white rounded-xl border border-gray-100 shadow-sm p-5 mb-5">
@@ -114,10 +129,12 @@
           <th class="px-4 py-2.5 text-center">У мене</th>
           <th class="px-4 py-2.5 text-center">Преп</th>
           <th class="px-4 py-2.5 text-left">Статус</th>
+          <th class="px-4 py-2.5 text-left">Коментар</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-gray-50">
         {% for r in result.tracked %}
+        {% set key = 't|' ~ r.tracking ~ '|' ~ r.asin %}
         <tr class="{% if r.status != 'match' %}bg-red-50/30{% endif %} hover:bg-gray-50">
           <td class="px-4 py-2 font-mono text-xs text-gray-700">{{ r.tracking }}</td>
           <td class="px-4 py-2 font-mono text-xs text-gray-600">{{ r.asin or '—' }}</td>
@@ -125,9 +142,10 @@
           <td class="px-4 py-2 text-center font-semibold {% if r.mine == 0 %}text-gray-300{% endif %}">{{ r.mine }}</td>
           <td class="px-4 py-2 text-center font-semibold {% if r.prep == 0 %}text-gray-300{% endif %}">{{ r.prep }}</td>
           <td class="px-4 py-2">{{ row_badge(r.status) }}</td>
+          {% if run and r.status != 'match' %}{{ comment_cell(run.id, key, comments.get(key)) }}{% else %}<td class="px-4 py-2"></td>{% endif %}
         </tr>
         {% else %}
-        <tr><td colspan="6" class="px-4 py-6 text-center text-gray-400">Немає рядків з треком.</td></tr>
+        <tr><td colspan="7" class="px-4 py-6 text-center text-gray-400">Немає рядків з треком.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -150,16 +168,19 @@
           <th class="px-4 py-2.5 text-center">У мене</th>
           <th class="px-4 py-2.5 text-center">Преп</th>
           <th class="px-4 py-2.5 text-left">Статус</th>
+          <th class="px-4 py-2.5 text-left">Коментар</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-gray-50">
         {% for r in result.untracked %}
+        {% set key = 'u|' ~ r.asin %}
         <tr class="{% if r.status != 'match' %}bg-red-50/30{% endif %} hover:bg-gray-50">
           <td class="px-4 py-2 font-mono text-xs text-gray-600">{{ r.asin or '—' }}</td>
           <td class="px-4 py-2 text-gray-500 truncate max-w-xs">{{ r.title or '—' }}</td>
           <td class="px-4 py-2 text-center font-semibold {% if r.mine == 0 %}text-gray-300{% endif %}">{{ r.mine }}</td>
           <td class="px-4 py-2 text-center font-semibold {% if r.prep == 0 %}text-gray-300{% endif %}">{{ r.prep }}</td>
           <td class="px-4 py-2">{{ row_badge(r.status) }}</td>
+          {% if run and r.status != 'match' %}{{ comment_cell(run.id, key, comments.get(key)) }}{% else %}<td class="px-4 py-2"></td>{% endif %}
         </tr>
         {% endfor %}
       </tbody>
@@ -186,11 +207,13 @@
           <th class="px-4 py-2.5 text-right">Моя собів.</th>
           <th class="px-4 py-2.5 text-right">Собів. препу</th>
           <th class="px-4 py-2.5 text-right">Різниця</th>
+          <th class="px-4 py-2.5 text-left">Коментар</th>
         </tr>
       </thead>
       <tbody class="divide-y divide-gray-50">
         {% for r in result.cost %}
         {% set has_diff = r.diff is not none and (r.diff >= 0.01 or r.diff <= -0.01) %}
+        {% set key = 'c|' ~ r.tracking ~ '|' ~ r.asin %}
         <tr class="{% if has_diff %}bg-amber-50/40{% endif %} hover:bg-gray-50">
           <td class="px-4 py-2 font-mono text-xs text-gray-700">{{ r.tracking }}</td>
           <td class="px-4 py-2 font-mono text-xs text-gray-600">{{ r.asin or '—' }}</td>
@@ -201,6 +224,7 @@
           <td class="px-4 py-2 text-right font-semibold {% if has_diff %}text-amber-700{% else %}text-gray-400{% endif %}">
             {% if r.diff is not none %}{% if r.diff < 0 %}−${{ "%.2f"|format(-r.diff) }}{% else %}+${{ "%.2f"|format(r.diff) }}{% endif %}{% else %}—{% endif %}
           </td>
+          {% if run and has_diff %}{{ comment_cell(run.id, key, comments.get(key)) }}{% else %}<td class="px-4 py-2"></td>{% endif %}
         </tr>
         {% endfor %}
       </tbody>
@@ -238,6 +262,7 @@
             <a href="/warehouse/reconcile/{{ h.id }}" class="text-indigo-600 hover:underline font-medium">
               {{ h.created_at.strftime('%d.%m.%Y %H:%M') if h.created_at else '—' }}
             </a>
+            {% if h.comments %}<span class="text-[10px] text-gray-400 ml-1" title="Коментарів">💬{{ h.comments|length }}</span>{% endif %}
           </td>
           <td class="px-4 py-2 text-gray-500">{{ h.user_name or '—' }}</td>
           <td class="px-4 py-2 text-gray-400 text-xs truncate max-w-xs">{{ h.my_filename or '—' }} / {{ h.prep_filename or '—' }}</td>

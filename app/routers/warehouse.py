@@ -8,7 +8,7 @@ from typing import Optional
 
 from app.database import get_db
 from app.auth import require_manager_up
-from app.models.warehouse import WarehouseItem, ReconciliationRun, WAREHOUSE_STATUS_LABELS, WAREHOUSE_STATUS_COLORS
+from app.models.warehouse import WarehouseItem, ReconciliationRun, ReconciliationComment, WAREHOUSE_STATUS_LABELS, WAREHOUSE_STATUS_COLORS
 from app.models.client import Client
 from app.permissions import can
 
@@ -183,15 +183,59 @@ def warehouse_reconcile_view(
 
     import json
     result = json.loads(run.result_json)
+    comments = {
+        c.row_key: c
+        for c in db.query(ReconciliationComment)
+        .filter(ReconciliationComment.run_id == run_id).all()
+    }
     return templates.TemplateResponse(
         request,
         "warehouse/reconcile.html",
         {
             "current_user": current_user,
             "result": result, "run": run, "error": None,
+            "comments": comments,
             "runs": _reconcile_history(db), "can": can,
         },
     )
+
+
+@router.post("/reconcile/{run_id}/comment")
+def warehouse_reconcile_comment(
+    run_id: int,
+    row_key: str = Form(...),
+    comment: str = Form(""),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    if not can(current_user, "view_parcels"):
+        return RedirectResponse("/warehouse/reconcile", status_code=302)
+    run = db.query(ReconciliationRun).filter(ReconciliationRun.id == run_id).first()
+    if not run:
+        return RedirectResponse("/warehouse/reconcile", status_code=302)
+
+    existing = (
+        db.query(ReconciliationComment)
+        .filter(ReconciliationComment.run_id == run_id,
+                ReconciliationComment.row_key == row_key)
+        .first()
+    )
+    text = comment.strip()
+    if text:
+        if existing:
+            existing.comment = text
+            existing.user_name = current_user.full_name or current_user.username
+        else:
+            db.add(ReconciliationComment(
+                run_id=run_id, row_key=row_key, comment=text,
+                user_name=current_user.full_name or current_user.username,
+            ))
+    elif existing:
+        db.delete(existing)  # cleared → remove
+    db.commit()
+
+    anchor = row_key.replace("|", "-")
+    return RedirectResponse(f"/warehouse/reconcile/{run_id}#{anchor}", status_code=302)
 
 
 @router.post("/reconcile/{run_id}/delete")
@@ -204,6 +248,9 @@ def warehouse_reconcile_delete(
         return RedirectResponse("/warehouse/reconcile", status_code=302)
     run = db.query(ReconciliationRun).filter(ReconciliationRun.id == run_id).first()
     if run:
+        db.query(ReconciliationComment).filter(
+            ReconciliationComment.run_id == run_id
+        ).delete()
         db.delete(run)
         db.commit()
     return RedirectResponse("/warehouse/reconcile", status_code=302)

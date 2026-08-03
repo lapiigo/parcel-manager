@@ -37,6 +37,28 @@ class ReconciliationRun(Base):
     problems = Column(Integer, default=0)
     cost_diff = Column(Integer, default=0)
 
+    comments = relationship(
+        "ReconciliationComment",
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+
+
+class ReconciliationComment(Base):
+    """A note on one mismatched row of a saved reconciliation run."""
+    __tablename__ = "reconciliation_comments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    run_id = Column(Integer, ForeignKey("reconciliation_runs.id", ondelete="CASCADE"),
+                    nullable=False, index=True)
+    row_key = Column(String(255), nullable=False, index=True)  # e.g. "t|1Z..|B0.."
+    comment = Column(Text, nullable=False)
+    user_name = Column(String(120), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    run = relationship("ReconciliationRun", back_populates="comments")
+
 
 WAREHOUSE_STATUS_LABELS = {
     "available":  "Available",
