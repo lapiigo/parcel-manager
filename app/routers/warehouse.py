@@ -1,5 +1,7 @@
-from fastapi import APIRouter, Depends, Form, Request, Query
-from fastapi.responses import HTMLResponse, RedirectResponse
+import io
+
+from fastapi import APIRouter, Depends, Form, Request, Query, UploadFile, File
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -81,6 +83,63 @@ def warehouse_list(
             "WAREHOUSE_STATUS_COLORS": WAREHOUSE_STATUS_COLORS,
             "can": can,
         },
+    )
+
+
+@router.get("/reconcile", response_class=HTMLResponse)
+def warehouse_reconcile_page(
+    request: Request,
+    current_user=Depends(require_manager_up),
+):
+    if not can(current_user, "view_parcels"):
+        return RedirectResponse("/dashboard", status_code=302)
+    return templates.TemplateResponse(
+        request,
+        "warehouse/reconcile.html",
+        {"current_user": current_user, "result": None, "error": None, "can": can},
+    )
+
+
+@router.get("/reconcile/template")
+def warehouse_reconcile_template(current_user=Depends(require_manager_up)):
+    from app.services.reconcile_service import build_template_xlsx
+    data = build_template_xlsx()
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="my_list_template.xlsx"'},
+    )
+
+
+@router.post("/reconcile", response_class=HTMLResponse)
+async def warehouse_reconcile_run(
+    request: Request,
+    my_file: UploadFile = File(...),
+    prep_file: UploadFile = File(...),
+    current_user=Depends(require_manager_up),
+):
+    if not can(current_user, "view_parcels"):
+        return RedirectResponse("/dashboard", status_code=302)
+
+    from app.services.reconcile_service import reconcile
+
+    error = None
+    result = None
+    try:
+        my_bytes = await my_file.read()
+        prep_bytes = await prep_file.read()
+        if not my_bytes or not prep_bytes:
+            error = "Обидва файли обов'язкові."
+        else:
+            result = reconcile(my_bytes, my_file.filename or "",
+                               prep_bytes, prep_file.filename or "")
+    except Exception as exc:
+        error = f"Не вдалося обробити файли: {exc}"
+
+    return templates.TemplateResponse(
+        request,
+        "warehouse/reconcile.html",
+        {"current_user": current_user, "result": result, "error": error, "can": can},
     )
 
 

@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}Звірка складу — Parcel Manager{% endblock %}
+{% block heading %}Звірка складу{% endblock %}
+{% block header_actions %}
+  <a href="/warehouse" class="text-sm text-gray-500 hover:text-gray-700">← Назад до складу</a>
+{% endblock %}
+
+{% block content %}
+
+{% macro row_badge(status) %}
+  {% set meta = {
+    'match':           ('✓ Збігається',      'bg-green-100 text-green-700'),
+    'qty_mismatch':    ('≠ Різна кількість',  'bg-amber-100 text-amber-700'),
+    'missing_in_prep': ('✗ Немає на складі',  'bg-red-100 text-red-700'),
+    'missing_in_mine': ('＋ Зайве на складі',  'bg-purple-100 text-purple-700'),
+  }.get(status, (status, 'bg-gray-100 text-gray-600')) %}
+  <span class="text-xs px-2 py-0.5 rounded-full font-semibold {{ meta[1] }}">{{ meta[0] }}</span>
+{% endmacro %}
+
+<!-- Upload form -->
+<form method="post" action="/warehouse/reconcile" enctype="multipart/form-data"
+      class="bg-white rounded-xl border border-gray-100 shadow-sm p-5 mb-5">
+  <div class="grid md:grid-cols-2 gap-4">
+    <div>
+      <label class="block text-sm font-semibold text-gray-700 mb-1">Мій список (що має бути на складі)</label>
+      <p class="text-xs text-gray-400 mb-2">
+        .xlsx або .csv з колонками <code class="bg-gray-100 px-1 rounded">tracking</code>,
+        <code class="bg-gray-100 px-1 rounded">asin</code>,
+        <code class="bg-gray-100 px-1 rounded">qty</code>.
+        <a href="/warehouse/reconcile/template" class="text-indigo-600 hover:underline">Завантажити шаблон ↓</a>
+      </p>
+      <input type="file" name="my_file" accept=".xlsx,.csv" required
+             class="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" />
+    </div>
+    <div>
+      <label class="block text-sm font-semibold text-gray-700 mb-1">Експорт з препу</label>
+      <p class="text-xs text-gray-400 mb-2">Файл зі складу як є — трек береться з «Origin ref», ASIN з «Actual ASIN», кількість з «Qty».</p>
+      <input type="file" name="prep_file" accept=".xlsx,.csv" required
+             class="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100" />
+    </div>
+  </div>
+  <div class="mt-4">
+    <button type="submit" class="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-5 py-2.5 rounded-lg transition-colors">
+      Звірити
+    </button>
+  </div>
+</form>
+
+{% if error %}
+<div class="px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700 mb-5">{{ error }}</div>
+{% endif %}
+
+{% if result %}
+{% set s = result.summary %}
+
+<!-- Summary tiles -->
+<div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+  <div class="bg-white rounded-xl border border-gray-100 shadow-sm p-4 text-center">
+    <div class="text-2xl font-bold text-gray-800">{{ s.total }}</div>
+    <div class="text-xs text-gray-400 mt-0.5">Позицій</div>
+  </div>
+  <div class="bg-green-50 rounded-xl border border-green-100 p-4 text-center">
+    <div class="text-2xl font-bold text-green-700">{{ s.get('match', 0) }}</div>
+    <div class="text-xs text-green-600 mt-0.5">Збігається</div>
+  </div>
+  <div class="bg-amber-50 rounded-xl border border-amber-100 p-4 text-center">
+    <div class="text-2xl font-bold text-amber-700">{{ s.get('qty_mismatch', 0) }}</div>
+    <div class="text-xs text-amber-600 mt-0.5">Різна к-сть</div>
+  </div>
+  <div class="bg-red-50 rounded-xl border border-red-100 p-4 text-center">
+    <div class="text-2xl font-bold text-red-700">{{ s.get('missing_in_prep', 0) }}</div>
+    <div class="text-xs text-red-600 mt-0.5">Немає на складі</div>
+  </div>
+  <div class="bg-purple-50 rounded-xl border border-purple-100 p-4 text-center">
+    <div class="text-2xl font-bold text-purple-700">{{ s.get('missing_in_mine', 0) }}</div>
+    <div class="text-xs text-purple-600 mt-0.5">Зайве на складі</div>
+  </div>
+</div>
+
+<p class="text-xs text-gray-400 mb-4">
+  Прочитано рядків — мій список: <strong>{{ result.meta.my_rows }}</strong>,
+  преп: <strong>{{ result.meta.prep_rows }}</strong>.
+  {% if not result.meta.my_headers.tracking %}<span class="text-amber-600">⚠ У моєму файлі не знайдено колонку tracking.</span>{% endif %}
+  {% if not result.meta.my_headers.asin %}<span class="text-amber-600">⚠ У моєму файлі не знайдено колонку asin.</span>{% endif %}
+</p>
+
+<!-- Primary: tracking + ASIN -->
+<div class="bg-white rounded-xl border border-gray-100 shadow-sm mb-5 overflow-hidden">
+  <div class="px-4 py-3 border-b border-gray-100 text-sm font-semibold text-gray-700">
+    За треком + ASIN ({{ result.tracked|length }})
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-xs uppercase text-gray-500 font-semibold tracking-wide">
+        <tr>
+          <th class="px-4 py-2.5 text-left">Трек</th>
+          <th class="px-4 py-2.5 text-left">ASIN</th>
+          <th class="px-4 py-2.5 text-left">Товар</th>
+          <th class="px-4 py-2.5 text-center">У мене</th>
+          <th class="px-4 py-2.5 text-center">Преп</th>
+          <th class="px-4 py-2.5 text-left">Статус</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-50">
+        {% for r in result.tracked %}
+        <tr class="{% if r.status != 'match' %}bg-red-50/30{% endif %} hover:bg-gray-50">
+          <td class="px-4 py-2 font-mono text-xs text-gray-700">{{ r.tracking }}</td>
+          <td class="px-4 py-2 font-mono text-xs text-gray-600">{{ r.asin or '—' }}</td>
+          <td class="px-4 py-2 text-gray-500 truncate max-w-xs">{{ r.title or '—' }}</td>
+          <td class="px-4 py-2 text-center font-semibold {% if r.mine == 0 %}text-gray-300{% endif %}">{{ r.mine }}</td>
+          <td class="px-4 py-2 text-center font-semibold {% if r.prep == 0 %}text-gray-300{% endif %}">{{ r.prep }}</td>
+          <td class="px-4 py-2">{{ row_badge(r.status) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="px-4 py-6 text-center text-gray-400">Немає рядків з треком.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Secondary: ASIN only (no tracking / returns) -->
+{% if result.untracked %}
+<div class="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+  <div class="px-4 py-3 border-b border-gray-100 text-sm font-semibold text-gray-700">
+    Без треку — за ASIN ({{ result.untracked|length }})
+    <span class="text-xs font-normal text-gray-400">повернення та рядки без Origin ref</span>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 text-xs uppercase text-gray-500 font-semibold tracking-wide">
+        <tr>
+          <th class="px-4 py-2.5 text-left">ASIN</th>
+          <th class="px-4 py-2.5 text-left">Товар</th>
+          <th class="px-4 py-2.5 text-center">У мене</th>
+          <th class="px-4 py-2.5 text-center">Преп</th>
+          <th class="px-4 py-2.5 text-left">Статус</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-50">
+        {% for r in result.untracked %}
+        <tr class="{% if r.status != 'match' %}bg-red-50/30{% endif %} hover:bg-gray-50">
+          <td class="px-4 py-2 font-mono text-xs text-gray-600">{{ r.asin or '—' }}</td>
+          <td class="px-4 py-2 text-gray-500 truncate max-w-xs">{{ r.title or '—' }}</td>
+          <td class="px-4 py-2 text-center font-semibold {% if r.mine == 0 %}text-gray-300{% endif %}">{{ r.mine }}</td>
+          <td class="px-4 py-2 text-center font-semibold {% if r.prep == 0 %}text-gray-300{% endif %}">{{ r.prep }}</td>
+          <td class="px-4 py-2">{{ row_badge(r.status) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% endif %}
+
+{% endblock %}
