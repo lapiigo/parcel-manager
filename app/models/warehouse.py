@@ -21,6 +21,23 @@ class WarehouseItem(Base):
     client = relationship("Client")
 
 
+class ReconciliationRun(Base):
+    """A saved warehouse reconciliation (my list vs prep export)."""
+    __tablename__ = "reconciliation_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+    user_name = Column(String(120), nullable=True)
+    my_filename = Column(String(255), nullable=True)
+    prep_filename = Column(String(255), nullable=True)
+    result_json = Column(Text, nullable=False)      # full reconcile() result
+    # quick-glance summary for the history list
+    total = Column(Integer, default=0)
+    matched = Column(Integer, default=0)
+    problems = Column(Integer, default=0)
+    cost_diff = Column(Integer, default=0)
+
+
 WAREHOUSE_STATUS_LABELS = {
     "available":  "Available",
     "reserved":   "Reserved",

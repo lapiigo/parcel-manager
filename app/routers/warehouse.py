@@ -8,7 +8,7 @@ from typing import Optional
 
 from app.database import get_db
 from app.auth import require_manager_up
-from app.models.warehouse import WarehouseItem, WAREHOUSE_STATUS_LABELS, WAREHOUSE_STATUS_COLORS
+from app.models.warehouse import WarehouseItem, ReconciliationRun, WAREHOUSE_STATUS_LABELS, WAREHOUSE_STATUS_COLORS
 from app.models.client import Client
 from app.permissions import can
 
@@ -86,9 +86,20 @@ def warehouse_list(
     )
 
 
+def _reconcile_history(db: Session, limit: int = 50):
+    return (
+        db.query(ReconciliationRun)
+        .order_by(ReconciliationRun.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
 @router.get("/reconcile", response_class=HTMLResponse)
 def warehouse_reconcile_page(
     request: Request,
+    error: str = Query(""),
+    db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
     if not can(current_user, "view_parcels"):
@@ -96,7 +107,11 @@ def warehouse_reconcile_page(
     return templates.TemplateResponse(
         request,
         "warehouse/reconcile.html",
-        {"current_user": current_user, "result": None, "error": None, "can": can},
+        {
+            "current_user": current_user,
+            "result": None, "run": None, "error": error or None,
+            "runs": _reconcile_history(db), "can": can,
+        },
     )
 
 
@@ -111,36 +126,87 @@ def warehouse_reconcile_template(current_user=Depends(require_manager_up)):
     )
 
 
-@router.post("/reconcile", response_class=HTMLResponse)
+@router.post("/reconcile")
 async def warehouse_reconcile_run(
     request: Request,
     my_file: UploadFile = File(...),
     prep_file: UploadFile = File(...),
+    db: Session = Depends(get_db),
     current_user=Depends(require_manager_up),
 ):
     if not can(current_user, "view_parcels"):
         return RedirectResponse("/dashboard", status_code=302)
 
+    import json
+    import urllib.parse
     from app.services.reconcile_service import reconcile
 
-    error = None
-    result = None
     try:
         my_bytes = await my_file.read()
         prep_bytes = await prep_file.read()
         if not my_bytes or not prep_bytes:
-            error = "Обидва файли обов'язкові."
-        else:
-            result = reconcile(my_bytes, my_file.filename or "",
-                               prep_bytes, prep_file.filename or "")
+            raise ValueError("Обидва файли обов'язкові.")
+        result = reconcile(my_bytes, my_file.filename or "",
+                           prep_bytes, prep_file.filename or "")
     except Exception as exc:
-        error = f"Не вдалося обробити файли: {exc}"
+        msg = urllib.parse.quote(f"Не вдалося обробити файли: {exc}")
+        return RedirectResponse(f"/warehouse/reconcile?error={msg}", status_code=302)
 
+    s = result.get("summary", {})
+    run = ReconciliationRun(
+        user_name=(current_user.full_name or current_user.username),
+        my_filename=my_file.filename,
+        prep_filename=prep_file.filename,
+        result_json=json.dumps(result, ensure_ascii=False),
+        total=s.get("total", 0),
+        matched=s.get("match", 0),
+        problems=s.get("problems", 0),
+        cost_diff=s.get("cost_diff", 0),
+    )
+    db.add(run)
+    db.commit()
+    return RedirectResponse(f"/warehouse/reconcile/{run.id}", status_code=302)
+
+
+@router.get("/reconcile/{run_id}", response_class=HTMLResponse)
+def warehouse_reconcile_view(
+    run_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    if not can(current_user, "view_parcels"):
+        return RedirectResponse("/dashboard", status_code=302)
+    run = db.query(ReconciliationRun).filter(ReconciliationRun.id == run_id).first()
+    if not run:
+        return RedirectResponse("/warehouse/reconcile", status_code=302)
+
+    import json
+    result = json.loads(run.result_json)
     return templates.TemplateResponse(
         request,
         "warehouse/reconcile.html",
-        {"current_user": current_user, "result": result, "error": error, "can": can},
+        {
+            "current_user": current_user,
+            "result": result, "run": run, "error": None,
+            "runs": _reconcile_history(db), "can": can,
+        },
     )
+
+
+@router.post("/reconcile/{run_id}/delete")
+def warehouse_reconcile_delete(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_up),
+):
+    if not can(current_user, "edit_parcel"):
+        return RedirectResponse("/warehouse/reconcile", status_code=302)
+    run = db.query(ReconciliationRun).filter(ReconciliationRun.id == run_id).first()
+    if run:
+        db.delete(run)
+        db.commit()
+    return RedirectResponse("/warehouse/reconcile", status_code=302)
 
 
 @router.get("/{item_id}", response_class=HTMLResponse)

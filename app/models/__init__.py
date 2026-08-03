@@ -7,7 +7,7 @@ from app.models.order import Order
 from app.models.report import Report
 from app.models.wishlist import WishlistItem, ClientShipXAddress
 from app.models.todo import TodoProject, TodoTask, TaskAttachment, TodoMeeting, Reminder, Note
-from app.models.warehouse import WarehouseItem
+from app.models.warehouse import WarehouseItem, ReconciliationRun
 
 __all__ = [
     "Supplier",
@@ -31,4 +31,5 @@ __all__ = [
     "Reminder",
     "Note",
     "WarehouseItem",
+    "ReconciliationRun",
 ]
